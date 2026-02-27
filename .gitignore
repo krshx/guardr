@@ -29,3 +29,6 @@ temp/
 # Internal documentation (exclude from public repo)
 *.md
 !README.md
+
+# Dashboard with credentials (keep local only)
+dashboard.html
