@@ -52,13 +52,14 @@ async function handleMessage(message, sender) {
     case MESSAGE_TYPES.SCAN_COMPLETE:
       return await handleScanComplete(data, sender.tab);
       
-    case MESSAGE_TYPES.GET_RESULTS:
-      // Called by popup to get latest result for current tab
-      const tabId = data?.tabId;
+    case MESSAGE_TYPES.GET_RESULTS: {
+      // tabId comes from popup via data.tabId (popup cannot use sender.tab)
+      const tabId = data?.tabId ?? sender?.tab?.id;
       if (tabId && tabResults.has(tabId)) {
         return tabResults.get(tabId);
       }
       return null;
+    }
       
     case MESSAGE_TYPES.GET_HISTORY:
       return await getHistory();

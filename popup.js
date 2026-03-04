@@ -66,7 +66,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   let previousResultShown = false;
   try {
     const previousResult = await new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage({ type: 'GET_RESULTS' }, (response) => {
+      chrome.runtime.sendMessage({ type: 'GET_RESULTS', data: { tabId: tab?.id } }, (response) => {
         if (chrome.runtime.lastError) {
           reject(chrome.runtime.lastError);
         } else {
