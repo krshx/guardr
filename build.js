@@ -100,11 +100,19 @@ function readModule(filePath) {
 
 /**
  * Transform a module's source code for IIFE bundling.
- * - Removes all `import ... from '...'` lines (resolved via __modules)
+ * - Removes all `import ... from '...'` statements (single- and multi-line)
  * - Removes `export` keywords from declarations
  * - Collects named exports and appends a `return { ... }` at the end
  */
 function transformModule(source, moduleName) {
+  // Strip ALL import statements first (handles multi-line blocks).
+  // Matches: import ... from '...' or import '...' — including newlines inside.
+  source = source.replace(/^import\s[\s\S]*?from\s+['"][^'"]+['"]\s*;?\s*$/gm, '');
+  // Also strip bare side-effect imports: import './foo'
+  source = source.replace(/^import\s+['"][^'"]+['"]\s*;?\s*$/gm, '');
+  // Clean up any } from '...' remnants from multi-line imports
+  source = source.replace(/^[^/\n]*\}\s+from\s+['"][^'"]+['"]\s*;?\s*$/gm, '');
+
   const lines = source.split('\n');
   const exportNames = [];
   const transformed = [];
@@ -112,7 +120,7 @@ function transformModule(source, moduleName) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    // Drop import statements entirely
+    // Skip any remaining bare import lines (safety net)
     if (/^\s*import\s+/.test(line)) {
       continue;
     }
