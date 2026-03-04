@@ -162,9 +162,14 @@ class Orchestrator {
           this._machine.transition(State.COMPLETE);
           await this._learning.recordSuccess(context, cachedPattern.strategy, cachedPattern.actions);
         } else {
-          // Pattern failed, fall through to regular analysis
+          // Pattern failed — reset state to allow fresh analysis.
+          // State is currently ACTING; transition ACTING→ANALYZING is now valid.
           log.warn('Cached pattern failed, analyzing fresh');
           await this._learning.recordFailure(context);
+          // Reset: ACTING → FAILED → IDLE → DETECTED so _analyzeAndAct can run normally
+          this._machine.transition(State.FAILED, { reason: 'pattern-retry' });
+          this._machine.transition(State.IDLE);
+          this._machine.transition(State.DETECTED, { banner, cmp });
         }
       }
       

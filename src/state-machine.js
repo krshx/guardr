@@ -11,7 +11,7 @@ const TRANSITIONS = {
   [State.IDLE]: [State.DETECTED],
   [State.DETECTED]: [State.ANALYZING, State.ACTING, State.FAILED], // Can skip to ACTING if pattern cached
   [State.ANALYZING]: [State.ACTING, State.FAILED],
-  [State.ACTING]: [State.COMPLETE, State.FAILED],
+  [State.ACTING]: [State.COMPLETE, State.FAILED, State.ANALYZING], // ANALYZING allowed for cache-miss retry
   [State.COMPLETE]: [State.IDLE],
   [State.FAILED]: [State.IDLE]
 };

@@ -128,9 +128,18 @@ export class Detector extends EventTarget {
       const pos = style.position;
       const zIndex = parseInt(style.zIndex, 10) || 0;
 
-      // Must be fixed/sticky or have a high z-index
-      const isOverlay = pos === 'fixed' || pos === 'sticky' || zIndex >= 1000;
+      // Must be fixed/sticky AND have a meaningful z-index.
+      // Require BOTH conditions to reduce false positives on nav bars etc.
+      const isOverlay = (pos === 'fixed' || pos === 'sticky') && zIndex >= 100;
       if (!isOverlay) continue;
+
+      // Broad scan requires STRICTER content validation than selector scan.
+      // Must contain at least 2 distinct consent-related keywords to avoid
+      // false-positiving on navigation bars or tooltips containing "privacy".
+      if (!this._hasSufficientConsentContent(el)) {
+        log.debug(`  ✗ broad scan: insufficient consent content: <${el.tagName.toLowerCase()} id="${el.id}">`);
+        continue;
+      }
 
       checked++;
       log.debug(`Broad candidate: <${el.tagName.toLowerCase()} id="${el.id}" class="${String(el.className).slice(0, 60)}" pos=${pos} z=${zIndex}>`);
@@ -143,6 +152,27 @@ export class Detector extends EventTarget {
     }
 
     log.debug(`Broad scan complete: ${checked} overlay-style element(s) checked, none passed validation`);
+  }
+
+  /**
+   * Check if an element has enough distinct consent-related keywords to
+   * confidently identify it as a consent banner (not a nav/tooltip/search result).
+   * Requires at least 2 of the primary consent signals.
+   * @param {Element} el
+   * @returns {boolean}
+   * @private
+   */
+  _hasSufficientConsentContent(el) {
+    const text = (el.textContent || '').toLowerCase();
+    const primarySignals = [
+      'cookie', 'consent', 'gdpr', 'personal data', 'your data',
+      'datenschutz', 'données personnelles', 'privacidad'
+    ];
+    // 'privacy' alone is too common (footers, nav links) — only count alongside others
+    const hits = primarySignals.filter(s => text.includes(s)).length;
+    // Also require a deny/reject-flavoured word to confirm it's an actionable banner
+    const hasDenySignal = /(reject|deny|decline|refuse|necessary only|opt.?out|ablehnen|refuser|rechazar)/i.test(text);
+    return hits >= 1 && hasDenySignal;
   }
   
   /**
