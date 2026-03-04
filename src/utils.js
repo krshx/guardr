@@ -210,7 +210,7 @@ export function waitForVisible(element, timeout = Timing.ELEMENT_WAIT_TIMEOUT) {
  */
 export function waitForRemoval(element, timeout = Timing.ELEMENT_WAIT_TIMEOUT) {
   return new Promise((resolve) => {
-    if (!element || !document.contains(element) || !isElementVisible(element)) {
+    if (!element || !element.isConnected || !isElementVisible(element)) {
       resolve(true);
       return;
     }
@@ -230,7 +230,7 @@ export function waitForRemoval(element, timeout = Timing.ELEMENT_WAIT_TIMEOUT) {
     };
     
     const check = () => {
-      if (!document.contains(element) || !isElementVisible(element)) {
+      if (!element.isConnected || !isElementVisible(element)) {
         cleanup();
         resolve(true);
         return true;
@@ -279,7 +279,11 @@ export function waitForRemoval(element, timeout = Timing.ELEMENT_WAIT_TIMEOUT) {
  * @returns {boolean}
  */
 export function isElementVisible(el) {
-  if (!el || !document.contains(el)) return false;
+  // Use isConnected instead of document.contains() — the latter returns false
+  // for elements inside a Shadow DOM (e.g. Usercentrics #uc-main-dialog inside
+  // #usercentrics-root's shadow tree). isConnected is true for both light and
+  // shadow DOM elements that are attached to a document.
+  if (!el || !el.isConnected) return false;
   
   // Fast path: hidden attribute
   if (el.hidden) return false;

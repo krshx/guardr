@@ -963,15 +963,16 @@ export class Actor {
    * @private
    */
   async _verifyBannerClosed(banner) {
-    // Check immediately
-    if (!document.contains(banner) || !isElementVisible(banner)) {
+    // Use isConnected (not document.contains) — shadow DOM elements are connected
+    // to a shadow root, not the document directly, so document.contains returns false.
+    if (!banner.isConnected || !isElementVisible(banner)) {
       return true;
     }
     
     // Wait and check again
     await this._waitForUI(Timing.CLICK_SETTLE_TIME * 2);
     
-    if (!document.contains(banner) || !isElementVisible(banner)) {
+    if (!banner.isConnected || !isElementVisible(banner)) {
       return true;
     }
     

@@ -331,7 +331,10 @@ export const BannerSelectors = [
   // CMP-specific (high confidence)
   '#onetrust-consent-sdk',
   '#CybotCookiebotDialog',
-  '#usercentrics-root',
+  '#usercentrics-root',    // Usercentrics shadow host (UC v2 / Smart Data Protector)
+  '#uc-main-dialog',       // Usercentrics: actual dialog rendered inside shadow DOM
+  '#uc-block',             // Usercentrics: alternate root id used on some setups
+  '[id^="uc-"]',           // Usercentrics: any uc-* root variant
   '#didomi-host',
   '.qc-cmp2-container',
   '#truste-consent-track',
@@ -430,6 +433,12 @@ export const BannerSelectors = [
 export const CMPContainerPatterns = [
   // Sourcepoint
   /^sp_message_container/,
+  // Usercentrics ("Smart Data Protector" / v2)
+  // #uc-main-dialog and #uc-block render inside #usercentrics-root's shadow DOM.
+  // Text check is moot — content is accessible in shadow tree.
+  /^uc-main-dialog/,
+  /^uc-block/,
+  /^usercentrics/i,
   // TrustArc
   /^truste-/,
   // Quantcast (CMP2)
