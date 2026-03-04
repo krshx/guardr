@@ -235,8 +235,10 @@ export class Detector extends EventTarget {
         }
       }
       
-      // If structural changes, debounce a full scan
-      if (hasNewNodes || hasVisibilityChange) {
+      // Only rescan when new nodes appear — attribute/visibility changes on existing
+      // elements do NOT warrant a full scan and would create an infinite loop after
+      // a failed action (Steam and other sites mutate styles continuously).
+      if (hasNewNodes) {
         debouncedCheck();
       }
     });

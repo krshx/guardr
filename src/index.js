@@ -173,8 +173,11 @@ class Orchestrator {
         }
       }
       
-      // If not complete, do fresh analysis
+      // If not complete, do fresh analysis.
+      // Small delay gives dynamically-rendered banners (Steam etc.) time to fully
+      // paint their buttons before we score interactive elements.
       if (this._machine.state !== State.COMPLETE) {
+        await new Promise(r => setTimeout(r, 300));
         await this._analyzeAndAct(banner, cmp, context);
       }
       

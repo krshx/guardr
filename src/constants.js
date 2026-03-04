@@ -370,6 +370,10 @@ export const BannerSelectors = [
   '#consent-banner',
   '#consent-popup',
 
+  // Steam
+  '#cookiePrefPopup',
+  '[class*="cookiepreferences_popup"]',
+
   // Generic class/id patterns (medium confidence)
   '[class*="cookie-banner"]',
   '[class*="cookie-consent"]',
