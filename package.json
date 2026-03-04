@@ -1,8 +1,12 @@
 {
-  "name": "guardr-testing",
-  "version": "2.1.4",
-  "description": "Automated testing suite for Guardr extension",
+  "name": "guardr",
+  "version": "3.1.9",
+  "description": "Guardr - Autonomous cookie consent denier with self-learning",
   "scripts": {
+    "build": "node build.js",
+    "build:watch": "node build.js --watch",
+    "build:minor": "node build.js --minor",
+    "build:patch": "node build.js --patch",
     "test": "node test-automation.js",
     "test:quick": "node test-automation.js --quick",
     "install-deps": "npm install puppeteer --save-dev"

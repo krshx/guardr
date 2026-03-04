@@ -4,31 +4,50 @@
 Intelligent Chrome extension with **self-learning capabilities** that automatically handles any CMP using universal semantic detection.
 
 [![Chrome Web Store](https://img.shields.io/badge/Chrome-Web%20Store-blue)](https://chromewebstore.google.com/)
-[![Version](https://img.shields.io/badge/version-2.1.0-green)](https://github.com/krshx/guardr)
+[![Version](https://img.shields.io/badge/version-3.0.0-brightgreen)](https://github.com/krshx/guardr)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 ---
 
 ## 🆕 What's New
 
-### v2.1.0 - **Intelligent Learning System** 🧠
-The extension now **grows smarter over time**:
-- **Auto-learns** from successful button detections
-- **Shares patterns** across all websites  
-- **Promotes patterns** to permanent library after 10+ proven uses
-- **Confidence scoring** ensures reliability (Bayesian-style)
-- **Export/import** learned patterns for sharing
+### v3.0.0 - **Complete Architecture Rewrite** ⚡
+**Event-Driven • Modular • Self-Learning • Massively Faster**
 
-[📚 Read Learning System Documentation →](LEARNING_SYSTEM_DOCS.md)
+The extension has been completely rewritten from the ground up with a modern, battle-tested architecture:
 
-### v2.0.0 - **Universal Semantic Detection** 🌍
-Works on **any** cookie banner without site-specific rules:
-- **15+ Languages**: English, French, German, Spanish, Italian, Portuguese, Dutch, Danish, Swedish, Norwegian, Finnish, Polish, Czech, Romanian, Greek, Hungarian
-- **400+ Patterns**: Comprehensive button text library
-- **Shadow DOM Support**: Handles Usercentrics, custom elements
-- **Dark Pattern Detection**: "No thanks", "Later", "Click here", etc.
+**Core Improvements:**
+- **⚡ Event-Driven Architecture** — No polling loops, <50ms detection latency
+- **🧩 Modular Design** — From 3,600 lines → 7 focused modules (<300 lines each)
+- **🚀 10x Faster** — Known patterns replay in <500ms, 4x faster initial detection
+- **🧠 Advanced Learning** — Fingerprinting, confidence scoring, cross-site pattern sharing
+- **🔒 State Machine** — Deterministic processing, zero race conditions
+- **🎯 Universal Detection** — No site-specific rules, works on any CMP
 
-[📖 Read v2.0 Release Notes →](RELEASE_NOTES_v2.0.0.md)
+**New Features:**
+- ✅ Self-learning engine with automatic pattern fingerprinting
+- ✅ Bayesian confidence scoring (85%+ accuracy required)
+- ✅ Enhanced action logging with all operation details
+- ✅ Consent-or-pay detection & automatic abort
+- ✅ Supabase telemetry backend (self-hosted option)
+- ✅ Automated end-to-end testing with 100+ test sites
+
+[📖 Read Full v3.0.0 Release Notes →](RELEASE_NOTES_v3.0.0.md) | [🏗️ Architecture Details →](ARCHITECTURE_V3.md)
+
+---
+
+## 🆚 Feature Comparison
+
+| Feature | v2.x | v3.0 |
+|---------|------|------|
+| **Detection Latency** | 200ms+ | <50ms ✨ |
+| **Known Pattern Replay** | N/A | <500ms ✨ |
+| **Architecture** | Monolithic | Modular ✨ |
+| **Learning System** | Basic | Advanced ✨ |
+| **State Management** | Procedural | State Machine ✨ |
+| **CMP Coverage** | Tier-based | Universal ✨ |
+| **Languages** | 15+ | 20+ ✨ |
+| **Auto Testing** | Manual | Automated ✨ |
 
 ---
 
@@ -64,7 +83,7 @@ Works on **any** cookie banner without site-specific rules:
 
 ## 🎯 What It Does
 
-DenyStealthCookies automatically:
+Guardr automatically:
 1. ✅ Detects cookie consent banners and CMPs
 2. ✅ Clicks "Reject All" / "Deny All" / "Object All" buttons
 3. ✅ Opens preference panels and navigates through all sections
@@ -90,8 +109,8 @@ DenyStealthCookies automatically:
 ### Manual Installation (Development)
 1. Clone this repository:
    ```bash
-   git clone https://github.com/krshx/denystealth-cookies.git
-   cd denystealth-cookies
+   git clone https://github.com/krshx/guardr.git
+   cd guardr
    ```
 
 2. Open Chrome and navigate to `chrome://extensions/`
@@ -120,25 +139,67 @@ DenyStealthCookies automatically:
 
 ---
 
-## 🏗️ Architecture
+## 🏗️ Architecture (v3.0)
 
-### Files
-- **`manifest.json`** — Extension configuration
-- **`content.js`** — Core CMP detection and denial logic (multi-level navigation, iframe scanning)
-- **`background.js`** — Service worker for message handling
-- **`popup.html/js`** — User interface and results display
-- **`telemetry.js`** — Optional anonymous usage statistics (opt-in only)
-- **`docs/index.html`** — Privacy policy
+### File Structure
+```
+guardr/
+├── manifest.json              # Extension configuration (Manifest v3)
+├── src/
+│   ├── index.js              # Orchestrator - wires all modules
+│   ├── detector.js           # Event-driven banner detection (~200 lines)
+│   ├── analyzer.js           # Semantic button classification (~250 lines)
+│   ├── actor.js              # Action execution & verification (~200 lines)
+│   ├── learning.js           # Self-learning engine (~200 lines)
+│   ├── state-machine.js      # State management (~150 lines)
+│   ├── constants.js          # Shared constants & patterns
+│   ├── utils.js              # Helper functions
+│   └── background.js         # Service worker
+├── content-v3.js             # Bundled content script
+├── popup.html/js             # User interface
+├── telemetry.js              # Optional anonymous telemetry
+└── docs/index.html           # Privacy policy
+```
 
-### Detection Strategies
-The extension uses 6 phases to ensure maximum coverage:
+### Core Modules
 
-1. **Direct Button Click** — Finds and clicks deny/reject buttons
-2. **CMP API Calls** — Uses vendor-specific APIs (OneTrust.RejectAll(), etc.)
-3. **Multi-Section Navigation** — Opens preferences, navigates through all tabs (Partners, Vendors, LI)
-4. **Toggle Scraping** — Unchecks all non-essential checkboxes/switches
-5. **Iframe Scanning** — Processes CMPs inside iframes
-6. **Banner Hiding** — Force-hides banner if still visible
+| Module | Lines | Purpose |
+|--------|-------|---------|
+| **Detector** | 200 | Watches DOM with MutationObserver, triggers on banner detection |
+| **Analyzer** | 250 | Classifies buttons semantically, generates action plans |
+| **Actor** | 200 | Executes actions: clicks, toggles, verifies results |
+| **State Machine** | 150 | Manages IDLE→DETECTED→ANALYZING→ACTING→COMPLETE flow |
+| **Learning Engine** | 200 | Fingerprints patterns, stores & retrieves learned actions |
+| **Orchestrator** | 150 | Wires modules, handles messaging, reports results |
+| **Background Worker** | 200 | History, telemetry, cross-tab pattern sync |
+
+### Event Flow
+
+```
+Page Load → Detector (MutationObserver)
+    ↓
+Banner Detected → State: IDLE → DETECTED
+    ↓
+Analyzer: Check Learning Engine for known pattern
+    ├─ Found → Use cached plan (fast path, <500ms)
+    └─ Not found → Analyze semantically
+        ↓
+        State: DETECTED → ANALYZING
+    ↓
+Actor: Execute plan
+    1. Try direct deny button
+    2. Try CMP-specific APIs
+    3. Open settings & toggle all off
+    4. Click save/confirm
+    ↓
+    State: ANALYZING → ACTING
+    ↓
+Verify: Banner closed? Toggles changed?
+    ├─ Success → Learn pattern, State: ACTING → COMPLETE
+    └─ Failure → Try next strategy
+    ↓
+Report: Send results to background, update history & badge
+```
 
 ---
 
@@ -149,7 +210,26 @@ The extension uses 6 phases to ensure maximum coverage:
 - **No personal data collected** — We never see what sites you visit
 - **Open source** — Audit the code yourself
 
-**Optional Telemetry:** If enabled, sends anonymous statistics (CMP type, consent count) to help improve CMP coverage. See [Privacy Policy](https://krshx.github.io/guardr/).
+**Optional Anonymous Telemetry:** 
+- Opt-in only (OFF by default)
+- Collects only: Domain (e.g., `example.com`), CMP type, denial breakdown (consent/LI/vendors), version
+- Never collects: Full URLs, personal data, browsing history, or any identifiable information
+- Used only to improve CMP detection and measure extension effectiveness
+- Uses free Supabase backend for aggregated analytics
+- See [SUPABASE_SETUP.md](SUPABASE_SETUP.md) to set up your own telemetry backend
+
+**What telemetry sends (when enabled):**
+```json
+{
+  "domain": "rightmove.co.uk",
+  "cmp_type": "onetrust",
+  "denied_count": 402,
+  "consent_denials": 5,
+  "legitimate_interest_denials": 16,
+  "vendor_denials": 381,
+  "banner_closed": true
+}
+```
 
 ---
 

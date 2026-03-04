@@ -1527,7 +1527,7 @@ document.getElementById('dismissDonationPrompt')?.addEventListener('click', () =
 // ── Settings, Donation & Telemetry ─────────────────────────────────────────
 
 async function initSettings() {
-  const data = await chrome.storage.local.get(['telemetryOptIn','autoMode','donationSnoozedUntil','runCount']);
+  const data = await chrome.storage.local.get(['telemetryOptIn','autoMode','debugMode','donationSnoozedUntil','runCount']);
 
   // Telemetry toggle
   const telToggle = document.getElementById('telemetryToggle');
@@ -1553,6 +1553,15 @@ async function initSettings() {
           badge.classList.remove('active');
         }
       }
+    });
+  }
+
+  // Debug logging toggle
+  const debugToggle = document.getElementById('debugModeToggle');
+  if (debugToggle) {
+    debugToggle.checked = data.debugMode === true;
+    debugToggle.addEventListener('change', () => {
+      chrome.storage.local.set({ debugMode: debugToggle.checked });
     });
   }
 

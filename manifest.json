@@ -1,17 +1,30 @@
 {
   "manifest_version": 3,
-  "name": "Guardr — Consent & Cookie Guardian",
-  "short_name": "Guardr",
-  "version": "2.1.4",
-  "description": "One-click denial of all non-essential cookies and tracking consents. Auto-learns patterns & lets you teach it. Handles complex multi-level CMPs with tab navigation, iframe scanning. Works on TCF, OneTrust, Cookiebot, Didomi, Quantcast & more. Privacy-first.",
+  "name": "Guardr - Cookie Consent Manager",
+  "version": "3.1.9",
+  "description": "Automatically denies optional cookies and protects your privacy. Event-driven, self-learning, universal detection.",
   "permissions": [
-    "activeTab",
-    "scripting",
     "storage",
+    "activeTab",
     "tabs"
   ],
   "host_permissions": [
     "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content-v3.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": false
+    }
   ],
   "action": {
     "default_popup": "popup.html",
@@ -20,23 +33,23 @@
       "32": "icons/icon32.png",
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
-    }
-  },
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "js": ["semantic-library.js", "learning-module.js", "content.js"],
-      "run_at": "document_idle",
-      "all_frames": false
-    }
-  ],
-  "background": {
-    "service_worker": "background.js"
+    },
+    "default_title": "Guardr - Cookie Protection"
   },
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
-  }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "icons/*"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ]
 }

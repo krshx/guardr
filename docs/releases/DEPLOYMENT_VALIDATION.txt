@@ -1,0 +1,31 @@
+==============================================
+GUARDR v3.1.0 - DEPLOYMENT VALIDATION REPORT
+==============================================
+
+TIMESTAMP: $(date)
+VERSION: 3.1.0
+STATUS: READY FOR DEPLOYMENT
+
+CORE FILES VERIFICATION
+========================
+✓ manifest.json (4.0K)
+✓ package.json (4.0K)
+✓ build.js (8.0K)
+✓ content-v3.js (108K)
+✓ popup.js ( 60K)
+✓ popup.html ( 36K)
+
+SOURCE MODULES (src/)
+=====================
+✓ actor.js (     420 lines)
+✓ analyzer.js (     552 lines)
+✓ background.js (     492 lines)
+✓ constants.js (     377 lines)
+✓ detector.js (     415 lines)
+✓ index.js (     412 lines)
+✓ learning.js (     485 lines)
+✓ state-machine.js (     365 lines)
+✓ utils.js (     609 lines)
+
+DOCUMENTATION ORGANIZATION
+===========================

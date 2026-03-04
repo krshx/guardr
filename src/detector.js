@@ -1,0 +1,562 @@
+/**
+ * Guardr v3.0 - Banner Detector
+ * Event-driven banner detection using MutationObserver
+ */
+
+import { BannerSelectors, CMPSignatures, CMPContainerPatterns, PaywallSignals, Events, Timing } from './constants.js';
+import { isElementVisible, debounce, getElementText, log } from './utils.js';
+
+/**
+ * Event-driven consent banner detector
+ */
+export class Detector extends EventTarget {
+  constructor() {
+    super();
+    this._observer = null;
+    this._detectedBanners = new WeakSet();
+    this._isRunning = false;
+    this._iframeObservers = [];
+  }
+  
+  /**
+   * Start detection
+   */
+  start() {
+    if (this._isRunning) return;
+    this._isRunning = true;
+    
+    log.info('Detector started — scanning for consent banners');
+
+    // Check for existing banners first
+    this._scanExisting();
+    
+    // Setup MutationObserver for new banners
+    this._setupObserver();
+    
+    // Watch for iframes
+    this._watchIframes();
+
+    // Late re-scans for CMPs that inject banners asynchronously
+    // (1 s, 2 s, 4 s after start)
+    const RESCAN_DELAYS = [1000, 2000, 4000, 7000]; // FIXED: Added 7s for Sourcepoint
+    for (const delay of RESCAN_DELAYS) {
+      setTimeout(() => {
+        if (this._isRunning && this._detectedBanners) {
+          log.debug(`Late scan at +${delay}ms`);
+          this._scanExisting();
+        }
+      }, delay);
+    }
+  }
+  
+  /**
+   * Stop detection and cleanup
+   */
+  stop() {
+    if (!this._isRunning) return;
+    this._isRunning = false;
+    
+    if (this._observer) {
+      this._observer.disconnect();
+      this._observer = null;
+    }
+    
+    this._iframeObservers.forEach(obs => obs.disconnect());
+    this._iframeObservers = [];
+    
+    log.debug('Detector stopped');
+  }
+  
+  /**
+   * Scan for existing banners on page load
+   * @private
+   */
+  _scanExisting() {
+    log.debug('Scanning DOM for consent banners...');
+    let selectorHits = 0;
+
+    // Check DOM for existing banners
+    for (const selector of BannerSelectors) {
+      try {
+        const elements = document.querySelectorAll(selector);
+        for (const el of elements) {
+          selectorHits++;
+          log.debug(`Selector match: "${selector}" → <${el.tagName.toLowerCase()} id="${el.id}" class="${String(el.className).slice(0, 50)}">`);
+          if (this._isValidBanner(el)) {
+            log.info(`Banner detected via selector: "${selector}"`);
+            this._emitDetection(el);
+            return; // Only emit once per scan
+          }
+        }
+      } catch {
+        // Invalid selector, skip
+      }
+    }
+
+    if (selectorHits > 0) {
+      log.debug(`Selector scan: ${selectorHits} match(es), none passed validation — trying broad scan`);
+    } else {
+      log.debug('Selector scan: no matches — trying broad scan');
+    }
+
+    // Broad scan fallback: fixed/sticky positioned elements likely to be consent overlays
+    this._broadScan();
+
+    // Check for CMP iframes
+    this._scanIframes();
+    this._scanShadowRoots(); // FIXED
+  }
+
+  /**
+   * Broad scan: check fixed/sticky positioned elements for consent content.
+   * Catches CMPs that use non-standard class/id naming.
+   * @private
+   */
+  _broadScan() {
+    log.debug('Running broad positional scan (fixed/sticky/high-z elements)...');
+    let checked = 0;
+
+    // Candidate tags for overlay banners
+    const candidates = document.querySelectorAll(
+      'div, section, aside, footer, header, nav, form, [role="dialog"], [role="alertdialog"], [role="banner"]'
+    );
+
+    for (const el of candidates) {
+      if (this._detectedBanners.has(el)) continue;
+
+      const style = window.getComputedStyle(el);
+      const pos = style.position;
+      const zIndex = parseInt(style.zIndex, 10) || 0;
+
+      // Must be fixed/sticky or have a high z-index
+      const isOverlay = pos === 'fixed' || pos === 'sticky' || zIndex >= 1000;
+      if (!isOverlay) continue;
+
+      checked++;
+      log.debug(`Broad candidate: <${el.tagName.toLowerCase()} id="${el.id}" class="${String(el.className).slice(0, 60)}" pos=${pos} z=${zIndex}>`);
+
+      if (this._isValidBanner(el)) {
+        log.info(`Banner detected via broad scan: <${el.tagName.toLowerCase()} id="${el.id}" class="${String(el.className).slice(0, 60)}">`);
+        this._emitDetection(el);
+        return;
+      }
+    }
+
+    log.debug(`Broad scan complete: ${checked} overlay-style element(s) checked, none passed validation`);
+  }
+  
+  /**
+   * Setup MutationObserver
+   * @private
+   */
+  /**
+   * Scan shadow DOM roots for banners (FIXED)
+   * @private
+   */
+  _scanShadowRoots() {
+    const walkShadow = (root) => {
+      if (root.shadowRoot) {
+        for (const sel of BannerSelectors) {
+          try {
+            const elements = root.shadowRoot.querySelectorAll(sel);
+            for (const el of elements) {
+              if (this._isValidBanner(el)) {
+                log.info(`Banner in shadow DOM: "${sel}"`);
+                this._emitDetection(el);
+                return;
+              }
+            }
+          } catch (_) {}
+        }
+        root.shadowRoot.querySelectorAll("*").forEach(walkShadow);
+      }
+    };
+    document.querySelectorAll("*").forEach(walkShadow);
+  }
+
+  _setupObserver() {
+    const debouncedCheck = debounce(() => {
+      this._scanExisting();
+    }, Timing.MUTATION_DEBOUNCE);
+    
+    this._observer = new MutationObserver((mutations) => {
+      // Quick check: any new nodes added?
+      let hasNewNodes = false;
+      let hasVisibilityChange = false;
+      
+      for (const mutation of mutations) {
+        if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+          // Check added nodes directly for banner matches
+          for (const node of mutation.addedNodes) {
+            if (node.nodeType === Node.ELEMENT_NODE) {
+              const banner = this._checkNodeForBanner(node);
+              if (banner) {
+                this._emitDetection(banner);
+                return;
+              }
+              hasNewNodes = true;
+            }
+          }
+        }
+        
+        if (mutation.type === 'attributes') {
+          // Visibility might have changed
+          hasVisibilityChange = true;
+        }
+      }
+      
+      // If structural changes, debounce a full scan
+      if (hasNewNodes || hasVisibilityChange) {
+        debouncedCheck();
+      }
+    });
+    
+    this._observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['style', 'class', 'hidden', 'aria-hidden']
+    });
+  }
+  
+  /**
+   * Check a specific node (and children) for banner matches
+   * @param {Node} node
+   * @returns {Element|null}
+   * @private
+   */
+  _checkNodeForBanner(node) {
+    if (!node || node.nodeType !== Node.ELEMENT_NODE) return null;
+    
+    // Check the node itself
+    if (this._matchesBannerSelector(node) && this._isValidBanner(node)) {
+      return node;
+    }
+    
+    // Check children
+    for (const selector of BannerSelectors) {
+      try {
+        const match = node.querySelector?.(selector);
+        if (match && this._isValidBanner(match)) {
+          return match;
+        }
+      } catch {
+        // Invalid selector
+      }
+    }
+    
+    return null;
+  }
+  
+  /**
+   * Check if element matches any banner selector
+   * @param {Element} el
+   * @returns {boolean}
+   * @private
+   */
+  _matchesBannerSelector(el) {
+    for (const selector of BannerSelectors) {
+      try {
+        if (el.matches(selector)) return true;
+      } catch {
+        // Invalid selector
+      }
+    }
+    return false;
+  }
+  
+  /**
+   * Validate that element is actually a consent banner
+   * @param {Element} el
+   * @returns {boolean}
+   * @private
+   */
+  _isValidBanner(el) {
+    // Already processed?
+    if (this._detectedBanners.has(el)) return false;
+    
+    // Not visible?
+    if (!isElementVisible(el)) {
+      log.debug(`  ✗ not visible: <${el.tagName.toLowerCase()} id="${el.id}">`);
+      return false;
+    }
+    
+    // Must have reasonable size
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 100 || rect.height < 30) {
+      log.debug(`  ✗ too small (${Math.round(rect.width)}×${Math.round(rect.height)}): <${el.tagName.toLowerCase()} id="${el.id}">`);
+      return false;
+    }
+
+    // Known CMP iframe container — skip text check (UI is in a cross-origin iframe)
+    if (this._isKnownCMPContainer(el)) {
+      log.debug(`  ✓ known CMP container (skipping text check): <${el.tagName.toLowerCase()} id="${el.id}">`);
+      return true;
+    }
+    
+    // Content analysis - must contain consent-related text
+    const text = (el.textContent || '').toLowerCase();
+    const hasConsentText = 
+      text.includes('cookie') ||
+      text.includes('consent') ||
+      text.includes('privacy') ||
+      text.includes('gdpr') ||
+      text.includes('tracking') ||
+      text.includes('personal data') ||
+      text.includes('your data') ||
+      text.includes('datenschutz') ||
+      text.includes('données personnelles') ||
+      text.includes('privacidad');
+    
+    if (!hasConsentText) {
+      log.debug(`  ✗ no consent text: <${el.tagName.toLowerCase()} id="${el.id}" class="${String(el.className).slice(0, 40)}">`);
+      return false;
+    }
+    
+    // Must have interactive elements (buttons/toggles)
+    const hasButtons = el.querySelector('button, a, input, [role="button"], [role="switch"]');
+    if (!hasButtons) {
+      log.debug(`  ✗ no interactive elements: <${el.tagName.toLowerCase()} id="${el.id}">`);
+      return false;
+    }
+    
+    log.debug(`  ✓ valid banner: <${el.tagName.toLowerCase()} id="${el.id}" class="${String(el.className).slice(0, 60)}" size=${Math.round(rect.width)}×${Math.round(rect.height)}>`);
+    return true;
+  }
+
+  /**
+   * Check if element is a known CMP iframe container (no inner text expected)
+   * @param {Element} el
+   * @returns {boolean}
+   * @private
+   */
+  _isKnownCMPContainer(el) {
+    const id = el.id || '';
+    const cls = (typeof el.className === 'string' ? el.className : '') || '';
+    const combined = `${id} ${cls}`;
+
+    // Check against known regex patterns
+    for (const pattern of CMPContainerPatterns) {
+      if (pattern.test(id) || pattern.test(cls)) return true;
+    }
+
+    // Check if element contains a known CMP iframe
+    const hasCMPIframe = el.querySelector(
+      'iframe[src*="sourcepoint"], iframe[src*="trustarc"], ' +
+      'iframe[src*="consent"], iframe[src*="cmp"], ' +
+      'iframe[id*="sp_message"], iframe[name*="sp_message"], ' +
+      'iframe[title*="consent" i], iframe[title*="privacy" i], iframe[title*="cookie" i]'
+    );
+    if (hasCMPIframe) return true;
+
+    // Check for CMP global variables that indicate an active CMP
+    const hasCMPGlobal = !!(window._sp_ || window.Sourcepoint);
+    if (hasCMPGlobal && (id.startsWith('sp_') || cls.includes('sp_'))) return true;
+
+    return false;
+  }
+  
+  /**
+   * Watch for new iframes
+   * @private
+   */
+  _watchIframes() {
+    // Scan existing iframes
+    this._scanIframes();
+    this._scanShadowRoots(); // FIXED
+    
+    // Watch for new iframes
+    const iframeObserver = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (node.tagName === 'IFRAME') {
+            this._checkIframe(node);
+          }
+        }
+      }
+    });
+    
+    iframeObserver.observe(document.documentElement, {
+      childList: true,
+      subtree: true
+    });
+    
+    this._iframeObservers.push(iframeObserver);
+  }
+  
+  /**
+   * Scan all iframes for consent content
+   * @private
+   */
+  _scanIframes() {
+    const iframes = document.querySelectorAll('iframe');
+    for (const iframe of iframes) {
+      this._checkIframe(iframe);
+    }
+  }
+  
+  /**
+   * Check iframe for consent content
+   * @param {HTMLIFrameElement} iframe
+   * @private
+   */
+  _checkIframe(iframe) {
+    const src = (iframe.src || '').toLowerCase();
+    const name = (iframe.name || '').toLowerCase();
+    const id = (iframe.id || '').toLowerCase();
+    
+    const isCMPIframe = 
+      src.includes('consent') ||
+      src.includes('cookie') ||
+      src.includes('privacy') ||
+      src.includes('onetrust') ||
+      src.includes('cookiebot') ||
+      src.includes('sourcepoint') ||
+      src.includes('trustarc') ||
+      src.includes('quantcast') ||
+      name.includes('consent') ||
+      id.includes('consent');
+    
+    if (isCMPIframe && isElementVisible(iframe)) {
+      // Try to find a parent container that wraps the iframe
+      let container = iframe.parentElement;
+      while (container && container !== document.body) {
+        if (this._isValidBanner(container)) {
+          this._emitDetection(container);
+          return;
+        }
+        container = container.parentElement;
+      }
+      
+      // If no container, emit the iframe itself
+      if (!this._detectedBanners.has(iframe)) {
+        this._detectedBanners.add(iframe);
+        this._emitDetection(iframe, { isIframe: true });
+      }
+    }
+  }
+  
+  /**
+   * Emit banner detection event
+   * @param {Element} banner
+   * @param {object} meta
+   * @private
+   */
+  _emitDetection(banner, meta = {}) {
+    if (this._detectedBanners.has(banner)) return;
+    this._detectedBanners.add(banner);
+    
+    const cmp = this._detectCMP(banner);
+    const isPaywall = this._detectPaywall(banner);
+    
+    const detail = {
+      banner,
+      cmp,
+      isPaywall,
+      timestamp: Date.now(),
+      ...meta
+    };
+    
+    log.info(`Banner detected: ${cmp || 'Generic'}`, isPaywall ? '(Paywall)' : '');
+    
+    this.dispatchEvent(new CustomEvent(Events.BANNER_DETECTED, { detail }));
+  }
+  
+  /**
+   * Detect which CMP is being used
+   * @param {Element} banner
+   * @returns {string|null}
+   * @private
+   */
+  _detectCMP(banner) {
+    // Check DOM signatures
+    for (const [key, config] of Object.entries(CMPSignatures)) {
+      for (const selector of config.selectors) {
+        try {
+          if (banner.matches(selector) || banner.querySelector(selector) || document.querySelector(selector)) {
+            return config.name;
+          }
+        } catch {
+          // Invalid selector
+        }
+      }
+    }
+    
+    // Check global variables
+    for (const [key, config] of Object.entries(CMPSignatures)) {
+      for (const global of config.globals) {
+        if (typeof window[global] !== 'undefined') {
+          return config.name;
+        }
+      }
+    }
+    
+    return null;
+  }
+  
+  /**
+   * Detect if this is a paywall/consent-or-pay scenario
+   * @param {Element} banner
+   * @returns {boolean}
+   * @private
+   */
+  _detectPaywall(banner) {
+    const text = (banner.textContent || '').toLowerCase();
+    
+    // Check for paywall signals
+    let paywallScore = 0;
+    for (const signal of PaywallSignals) {
+      if (text.includes(signal)) {
+        paywallScore++;
+      }
+    }
+    
+    // Check for price mentions
+    if (/\d+[.,]\d{2}\s*[€$£]|[€$£]\s*\d+[.,]\d{2}/.test(text)) {
+      paywallScore += 2;
+    }
+    if (/\d+\s*(per|\/)\s*(month|year|mo|yr)/i.test(text)) {
+      paywallScore += 2;
+    }
+    
+    // Strong paywall indicator: only accept buttons, no reject
+    const buttons = banner.querySelectorAll('button, a[role="button"], [role="button"]');
+    let hasAccept = false;
+    let hasReject = false;
+    
+    for (const btn of buttons) {
+      const btnText = getElementText(btn);
+      if (/accept|agree|allow|consent|subscribe/i.test(btnText)) hasAccept = true;
+      if (/reject|deny|decline|refuse/i.test(btnText)) hasReject = true;
+    }
+    
+    if (hasAccept && !hasReject && paywallScore > 0) {
+      paywallScore += 3;
+    }
+    
+    return paywallScore >= 3;
+  }
+  
+  /**
+   * Force a re-scan (useful after navigation)
+   */
+  rescan() {
+    log.info('Rescanning for consent banners...');
+    this._detectedBanners = new WeakSet();
+    this._scanExisting();
+  }
+}
+
+// Singleton instance
+let instance = null;
+
+/**
+ * Get or create detector instance
+ * @returns {Detector}
+ */
+export function getDetector() {
+  if (!instance) {
+    instance = new Detector();
+  }
+  return instance;
+}
