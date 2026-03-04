@@ -427,10 +427,12 @@ export class Analyzer {
     const hasSave = byType[ButtonType.SAVE].length > 0;
     
     // Best case: direct deny button
+    // Threshold 8 = minimum for a single aria-label match (ARIA_MATCH=8) or text match (TEXT_MATCH=10).
+    // Must run BEFORE toggle check — otherwise banners with both a deny button and toggles
+    // (very common) skip straight to toggle-and-save and never click the obvious reject button.
     if (hasDeny) {
       const topDeny = byType[ButtonType.DENY][0];
-      // High confidence deny button
-      if (topDeny.score >= 15) {
+      if (topDeny.score >= 8) {
         return 'direct-deny';
       }
     }

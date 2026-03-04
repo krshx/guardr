@@ -1,11 +1,11 @@
-# Guardr 🛡️
+# Guardr
 
-**One-click denial of all non-essential cookies and tracking consents.**  
-Intelligent Chrome extension with **self-learning capabilities** that automatically handles any CMP using universal semantic detection.
+Chrome extension that automatically denies non-essential cookie consent on any website.
 
-[![Chrome Web Store](https://img.shields.io/badge/Chrome-Web%20Store-blue)](https://chromewebstore.google.com/)
-[![Version](https://img.shields.io/badge/version-3.0.0-brightgreen)](https://github.com/krshx/guardr)
+[![Version](https://img.shields.io/badge/version-3.1.12-brightgreen)](https://github.com/krshx/guardr)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
+> **For implementation details, architecture, and LLM prompts:** see [DSGN_SPEC.md](DSGN_SPEC.md)
 
 ---
 

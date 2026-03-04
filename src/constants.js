@@ -185,7 +185,7 @@ export const Signals = Object.freeze({
 // Negative signals (reduce score if present)
 export const NegativeSignals = Object.freeze({
   ACCEPT: ['reject', 'deny', 'refuse', 'decline', 'necessary', 'essential', 'required'],
-  DENY: ['accept', 'agree', 'allow', 'consent', 'all cookies', 'enable'],
+  DENY: ['accept', 'agree', 'allow', 'consent', 'enable'],  // 'all cookies' removed — appears in legitimate deny buttons like "Reject all cookies"
   SETTINGS: ['accept', 'reject', 'deny', 'agree'],
   SAVE: ['reject', 'deny', 'cancel']
 });
