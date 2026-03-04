@@ -99,20 +99,57 @@ function readModule(filePath) {
 // =============================================================================
 
 /**
- * Transform a module's source code for IIFE bundling.
- * - Removes all `import ... from '...'` statements (single- and multi-line)
- * - Removes `export` keywords from declarations
- * - Collects named exports and appends a `return { ... }` at the end
+ * Parse all ES6 import statements from source (before stripping).
+ * Returns an array of { names: string[], moduleKey: string } objects.
+ * Handles both single-line and multi-line import blocks.
+ */
+function parseImports(source) {
+  const imports = [];
+  // Normalise line endings then collapse multi-line imports to single lines
+  const flat = source.replace(/\r\n/g, '\n');
+  // Match: import { ... } from './foo.js'  (possibly spanning multiple lines)
+  const importRe = /import\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/g;
+  let m;
+  while ((m = importRe.exec(flat)) !== null) {
+    const names = m[1]
+      .split(',')
+      .map(s => s.trim().replace(/\s+as\s+\S+/, '').trim()) // drop `foo as bar` aliases
+      .filter(Boolean);
+    const specifier = m[2]; // e.g. './constants.js'
+    // Derive the __modules key from the specifier filename (no ext, no path)
+    const moduleKey = path.basename(specifier, '.js');
+    imports.push({ names, moduleKey });
+  }
+  return imports;
+}
+
+/**
+ * Transform a module's source code for IIFE bundling:
+ * 1. Parse imports → emit `const { X, Y } = __modules['key'];` injections
+ * 2. Strip all ES6 import statements (single- and multi-line)
+ * 3. Strip `export` keyword from declarations
+ * 4. Collect exported names → append `return { ... }` at the end
  */
 function transformModule(source, moduleName) {
-  // Strip ALL import statements first (handles multi-line blocks).
-  // Matches: import ... from '...' or import '...' — including newlines inside.
-  source = source.replace(/^import\s[\s\S]*?from\s+['"][^'"]+['"]\s*;?\s*$/gm, '');
-  // Also strip bare side-effect imports: import './foo'
-  source = source.replace(/^import\s+['"][^'"]+['"]\s*;?\s*$/gm, '');
-  // Clean up any } from '...' remnants from multi-line imports
-  source = source.replace(/^[^/\n]*\}\s+from\s+['"][^'"]+['"]\s*;?\s*$/gm, '');
+  // ── 1. Parse imports BEFORE stripping them ─────────────────────────────────
+  const parsedImports = parseImports(source);
 
+  // Build __modules injection lines
+  const injections = parsedImports.map(({ names, moduleKey }) =>
+    `const { ${names.join(', ')} } = __modules['${moduleKey}'];`
+  );
+
+  // ── 2. Strip all import statements (single- and multi-line) ────────────────
+  // Collapse multi-line import blocks to single line first, then strip
+  source = source.replace(/import\s*\{[^}]*\}\s*from\s*['"][^'"]+['"]\s*;?/gs, '');
+  // Bare side-effect imports: import './foo'
+  source = source.replace(/import\s+['"][^'"]+['"]\s*;?/g, '');
+  // Default imports: import Foo from './foo'
+  source = source.replace(/import\s+\w+\s+from\s+['"][^'"]+['"]\s*;?/g, '');
+  // Any stray `} from '...'` remnants
+  source = source.replace(/^\s*\}\s*from\s*['"][^'"]+['"]\s*;?\s*$/gm, '');
+
+  // ── 3 & 4. Process line-by-line for export handling ────────────────────────
   const lines = source.split('\n');
   const exportNames = [];
   const transformed = [];
@@ -120,66 +157,52 @@ function transformModule(source, moduleName) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    // Skip any remaining bare import lines (safety net)
-    if (/^\s*import\s+/.test(line)) {
-      continue;
-    }
+    // Safety net: skip any remaining import lines
+    if (/^\s*import[\s{]/.test(line)) continue;
 
-    // `export default` → just the value
+    // `export default` → strip keyword
     if (/^\s*export\s+default\s+/.test(line)) {
       transformed.push(line.replace(/^\s*export\s+default\s+/, ''));
       continue;
     }
 
     // `export class Foo` / `export function foo` / `export const foo` / `export async function`
-    const namedExportMatch = line.match(
+    const namedMatch = line.match(
       /^\s*export\s+(class|function|async\s+function|const|let|var)\s+(\w+)/
     );
-    if (namedExportMatch) {
-      const exportedName = namedExportMatch[2];
-      exportNames.push(exportedName);
-      // Strip the `export ` keyword
+    if (namedMatch) {
+      exportNames.push(namedMatch[2]);
       transformed.push(line.replace(/^(\s*)export\s+/, '$1'));
       continue;
     }
 
-    // `export { foo, bar }` re-export lines
+    // `export { foo, bar }`
     const reExportMatch = line.match(/^\s*export\s+\{([^}]+)\}/);
     if (reExportMatch) {
-      const names = reExportMatch[1].split(',').map(s => s.trim()).filter(Boolean);
-      exportNames.push(...names);
-      // Don't emit the export line itself
+      reExportMatch[1].split(',').map(s => s.trim()).filter(Boolean)
+        .forEach(n => exportNames.push(n));
       continue;
     }
 
     transformed.push(line);
   }
 
-  // Build return statement with all exports
-  let result = transformed.join('\n');
+  // ── Assemble ────────────────────────────────────────────────────────────────
+  let result = '';
+
+  // Inject __modules lookups at the very top of the module body
+  if (injections.length > 0) {
+    result += injections.join('\n') + '\n\n';
+  }
+
+  result += transformed.join('\n');
+
+  // Append return statement
   if (exportNames.length > 0) {
-    const returnProps = exportNames.join(', ');
-    result += `\n\n    return { ${returnProps} };\n`;
+    result += `\n\n    return { ${exportNames.join(', ')} };\n`;
   }
 
   return result;
-}
-
-/**
- * Rewrite import statements inside a module body to use __modules lookups.
- * Called on the ALREADY-TRANSFORMED source (imports stripped) — this pass
- * instead rewrites any `const { X } = require(...)` or leftover patterns.
- *
- * Since we strip all imports in transformModule, the modules themselves must
- * reference their dependencies via destructuring from __modules at the top
- * of each module. We inject those lookups automatically here.
- */
-function injectModuleDependencies(source, moduleName, allModuleNames) {
-  // Find which modules are referenced via import in the ORIGINAL source
-  // (already removed) and inject __modules lookups at the top.
-  // We scan the original source for import ... from './foo' patterns.
-  return source; // Dependencies handled by transform stripping imports; modules
-                 // use __modules directly (already written that way in src/).
 }
 
 // =============================================================================
