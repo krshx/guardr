@@ -7,7 +7,8 @@ import {
   ButtonType, 
   Signals, 
   NegativeSignals, 
-  ScoringWeights 
+  ScoringWeights,
+  DenyPatterns
 } from './constants.js';
 import { 
   isElementVisible, 
@@ -213,6 +214,19 @@ export class Analyzer {
       }
     }
     
+    // Regex pattern fallback for DENY text — only fires when string matching missed.
+    // This catches variations with intervening words ("essential cookies only"),
+    // word-order flips ("only essential"), and hyphenated forms ("essential-cookies only").
+    if (type === ButtonType.DENY && !matchedSignals.some(s => s.source === 'text')) {
+      for (const pattern of DenyPatterns) {
+        if (pattern.test(sources.text)) {
+          total += ScoringWeights.TEXT_MATCH;
+          matchedSignals.push({ signal: pattern.toString(), source: 'pattern' });
+          break; // One pattern match = one TEXT_MATCH score addition; stop after first hit
+        }
+      }
+    }
+
     // Apply negative signals (penalties)
     for (const signal of negativeSignals) {
       if (sources.text.includes(signal)) {
