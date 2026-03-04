@@ -13,7 +13,8 @@
 
 import { Timing, ButtonType } from './constants.js';
 import { 
-  clickElement, 
+  clickElement,
+  isPageNavLink,
   setToggleState, 
   getToggleState,
   waitForElement,
@@ -671,6 +672,13 @@ export class Actor {
     for (const btn of plan.denyButtons) {
       if (!isElementVisible(btn.element)) continue;
       
+      // Never click a link that navigates to a different page — that abandons the
+      // banner context. Real deny buttons are <button> or <a href="#"> elements.
+      if (isPageNavLink(btn.element)) {
+        log.debug('Skipping deny candidate — it is a page-navigation link:', btn.element.href);
+        continue;
+      }
+      
       log.debug('Clicking deny button:', btn.score);
       const clicked = clickElement(btn.element);
       
@@ -750,6 +758,15 @@ export class Actor {
   async _executeSettingsStrategy(plan, result) {
     for (const btn of plan.settingsButtons) {
       if (!isElementVisible(btn.element)) continue;
+      
+      // Skip links that navigate to a different page. A settings button on a banner
+      // should expand an inline panel — if it's a full-page link, clicking it would
+      // abandon the banner and leave the user on a preferences page with no further
+      // action taken. There is no safe way to complete the denial flow after navigation.
+      if (isPageNavLink(btn.element)) {
+        log.debug('Skipping settings button — it is a page-navigation link:', btn.element.href);
+        continue;
+      }
       
       const clicked = clickElement(btn.element);
       if (clicked) {

@@ -428,6 +428,26 @@ export function getToggles(container) {
  * @param {Element} el
  * @returns {boolean}
  */
+/**
+ * Returns true if clicking this element would navigate the browser to a different page.
+ * Used to prevent the deny/settings strategies from accidentally navigating away.
+ * @param {Element} el
+ * @returns {boolean}
+ */
+export function isPageNavLink(el) {
+  if (!el || el.tagName !== 'A') return false;
+  const href = el.getAttribute('href');
+  if (!href || href === '#' || href.startsWith('javascript:') || href.startsWith('mailto:')) return false;
+  try {
+    const target = new URL(href, window.location.href);
+    // Same origin + same path = in-page anchor or same-page form; not a navigation
+    return target.origin !== window.location.origin ||
+           target.pathname !== window.location.pathname;
+  } catch {
+    return false;
+  }
+}
+
 export function clickElement(el) {
   if (!el || !isElementVisible(el)) return false;
   

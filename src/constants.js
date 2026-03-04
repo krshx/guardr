@@ -113,8 +113,9 @@ export const Signals = Object.freeze({
     'i disagree', 'no, thank you', 'no, thanks', 'no thanks',
     'disable all', 'turn off all', 'deactivate all',
     'not now', 'maybe later',
-    // English — UI labels (often used as button text on preference panels)
-    'manage cookies', 'cookie settings',
+    // English — UI labels that open preference panels (NOT deny actions — moved to SETTINGS)
+    // NOTE: 'manage cookies' and 'cookie settings' were previously here but caused
+    // buttons like Steam's "Cookie Settings" link to be misclassified as deny buttons.
     // German
     'ablehnen', 'alle ablehnen', 'nicht zustimmen',
     'nur notwendige', 'nur notwendige cookies', 'nur erforderliche',
@@ -176,7 +177,9 @@ export const Signals = Object.freeze({
     // English
     'settings', 'preferences', 'manage', 'customize', 'options', 'configure',
     'cookie settings', 'privacy settings', 'manage preferences', 'more options',
+    'manage cookies', 'cookie preferences', 'privacy preferences',
     'advanced', 'details', 'learn more', 'more info', 'privacy options',
+    'detailed settings', 'customise', 'customise cookies',
     // German
     'einstellungen', 'anpassen', 'verwalten', 'optionen', 'konfigurieren',
     // French
@@ -505,6 +508,7 @@ export const Timing = Object.freeze({
   
   // Timeouts
   TOTAL_OPERATION_TIMEOUT: 20000, // must exceed worst-case CMP API wait (≤7s)
+  SETTINGS_EXPAND_TIME: 800,      // wait for inline settings panel to animate open
   SINGLE_ACTION_TIMEOUT: 3000,
   
   // Retries
