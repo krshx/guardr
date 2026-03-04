@@ -25,6 +25,7 @@ class Orchestrator {
     this._initialized = false;
     this._autoMode = true;       // default ON; refreshed from storage at init
     this._manualRunActive = false; // true while runAndGetResult is pending
+    this._processAttempts = 0;   // incremented on each FAILED result; capped at 3 per page
   }
   
   /**
@@ -106,7 +107,14 @@ class Orchestrator {
     const { banner, cmp, isPaywall } = detail;
 
     log.info(`Banner detected — CMP: ${cmp || 'unknown'}, paywall: ${isPaywall}, element: <${banner.tagName?.toLowerCase()} id="${banner.id || ''}">`);
-    
+
+    // Hard cap: after 3 failed attempts on this page, give up until navigation.
+    // Prevents infinite re-detection loops when a CMP keeps re-injecting its banner.
+    if (!this._manualRunActive && this._processAttempts >= 3) {
+      log.warn(`[Guardr] Max processing attempts (3) reached — ignoring banner until navigation`);
+      return;
+    }
+
     // If auto-deny is off and this is NOT a manual popup trigger, skip
     if (!this._autoMode && !this._manualRunActive) {
       log.info('Auto-deny is OFF — skipping autonomous processing');
@@ -119,6 +127,8 @@ class Orchestrator {
       return;
     }
     
+    let _processingSucceeded = false;
+
     try {
       // Check context is valid
       if (!isContextValid()) {
@@ -180,7 +190,9 @@ class Orchestrator {
         await new Promise(r => setTimeout(r, 300));
         await this._analyzeAndAct(banner, cmp, context);
       }
-      
+
+      _processingSucceeded = (this._machine.state === State.COMPLETE);
+
       // Report result
       await this._reportResult();
       
@@ -191,6 +203,15 @@ class Orchestrator {
       await this._reportResult();
       
     } finally {
+      if (_processingSucceeded) {
+        this._processAttempts = 0;
+      } else {
+        this._processAttempts++;
+        this._detector.markFailed(banner);
+        if (this._processAttempts >= 3) {
+          log.warn('[Guardr] Max attempts reached — scanner paused for this page');
+        }
+      }
       this._machine.releaseLock();
     }
   }
@@ -379,6 +400,7 @@ class Orchestrator {
    */
   _onNavigation() {
     log.debug('Navigation detected');
+    this._processAttempts = 0;
     this._machine.reset();
     this._result.reset();
     this._analyzer.clearCache();

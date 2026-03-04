@@ -14,6 +14,7 @@ export class Detector extends EventTarget {
     super();
     this._observer = null;
     this._detectedBanners = new WeakSet();
+    this._knownFailedIds = new Set(); // id/class fingerprints of banners that already failed
     this._isRunning = false;
     this._iframeObservers = [];
   }
@@ -306,7 +307,19 @@ export class Detector extends EventTarget {
   _isValidBanner(el) {
     // Already processed?
     if (this._detectedBanners.has(el)) return false;
-    
+
+    // Same id or className as a previously-failed banner — skip even if re-injected.
+    const elId = el.id;
+    const elClass = typeof el.className === 'string' ? el.className.trim() : '';
+    if (elId && this._knownFailedIds.has(`id:${elId}`)) {
+      log.debug(`  ✗ known-failed banner: #${elId}`);
+      return false;
+    }
+    if (elClass && this._knownFailedIds.has(`class:${elClass}`)) {
+      log.debug(`  ✗ known-failed banner class: .${elClass.slice(0, 60)}`);
+      return false;
+    }
+
     // Not visible?
     if (!isElementVisible(el)) {
       log.debug(`  ✗ not visible: <${el.tagName.toLowerCase()} id="${el.id}">`);
@@ -474,6 +487,20 @@ export class Detector extends EventTarget {
    * @param {object} meta
    * @private
    */
+  /**
+   * Mark a banner element as permanently failed for this page load.
+   * Prevents re-detection even if the site re-injects the same element id/class.
+   * Cleared by rescan() on navigation.
+   * @param {Element} el
+   */
+  markFailed(el) {
+    if (!el) return;
+    if (el.id) this._knownFailedIds.add(`id:${el.id}`);
+    const cls = typeof el.className === 'string' ? el.className.trim() : '';
+    if (cls) this._knownFailedIds.add(`class:${cls}`);
+    log.debug(`Detector: marked as known-failed — #${el.id || '?'} .${cls.slice(0, 40)}`);
+  }
+
   _emitDetection(banner, meta = {}) {
     if (this._detectedBanners.has(banner)) return;
     this._detectedBanners.add(banner);
@@ -575,6 +602,7 @@ export class Detector extends EventTarget {
   rescan() {
     log.info('Rescanning for consent banners...');
     this._detectedBanners = new WeakSet();
+    this._knownFailedIds = new Set();
     this._scanExisting();
   }
 }
