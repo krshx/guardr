@@ -510,18 +510,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     const kept    = data.mandatory?.length || 0;
     const errs    = data.errors?.length || 0;
 
-    statRemoved.textContent = removed;
-    statKept.textContent    = kept;
-    statErrors.textContent  = errs;
-
-    document.getElementById('tabRemoved').textContent = `🚫 Denied (${removed})`;
-    document.getElementById('tabKept').textContent    = `🔒 Kept (${kept})`;
-    document.getElementById('tabErrors').textContent  = `⚠ Errors (${errs})`;
-
     // Determine if this was a direct-deny / CMP-API run (no individual toggles enumerated)
     const isDirectDenyRun = data.success && removed === 0 &&
       (data.strategy === 'direct-deny' || data.cmpMethod === 'deny-button' ||
        data.strategy === 'cmp-api' || data.cmpMethod === 'cmp-api');
+
+    // Show "All" instead of "0" for direct-deny so counters aren't misleading
+    statRemoved.textContent = isDirectDenyRun ? 'All' : removed;
+    statKept.textContent    = kept;
+    statErrors.textContent  = errs;
+
+    document.getElementById('tabRemoved').textContent = isDirectDenyRun ? '🚫 Denied (All)' : `🚫 Denied (${removed})`;
+    document.getElementById('tabKept').textContent    = `🔒 Kept (${kept})`;
+    document.getElementById('tabErrors').textContent  = `⚠ Errors (${errs})`;
 
     panelRemoved.innerHTML = removed > 0
       ? data.unchecked.map(item => renderItem(item, 'removed')).join('')
