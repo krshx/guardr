@@ -437,6 +437,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     const sections = result.sectionsProcessed?.length || 0;
     const iframes = result.iframesScanned || 0;
 
+    // For direct-deny / CMP-API, individual toggles aren't enumerated — show meaningful label
+    const isDirectDeny = result.success && removed === 0 &&
+      (result.strategy === 'direct-deny' || result.cmpMethod === 'deny-button' ||
+       result.strategy === 'cmp-api' || result.cmpMethod === 'cmp-api');
+    const deniedLabel = isDirectDeny
+      ? 'All non-essential denied'
+      : `${removed} consent${removed !== 1 ? 's' : ''} denied`;
+
     let detailParts = [`${kept} essential kept`, `banner ${result.bannerClosed ? '✓ closed' : 'not closed'}`];
     if(sections > 0) detailParts.push(`${sections} sections`);
     if(iframes > 0) detailParts.push(`${iframes} iframes`);
@@ -444,7 +452,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     detailParts.push(runtime);
 
     setStatus('done',
-      `${removed} consent${removed !== 1 ? 's' : ''} denied`,
+      deniedLabel,
       detailParts.filter(Boolean).join(' · ')
     );
 
@@ -510,9 +518,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('tabKept').textContent    = `🔒 Kept (${kept})`;
     document.getElementById('tabErrors').textContent  = `⚠ Errors (${errs})`;
 
+    // Determine if this was a direct-deny / CMP-API run (no individual toggles enumerated)
+    const isDirectDenyRun = data.success && removed === 0 &&
+      (data.strategy === 'direct-deny' || data.cmpMethod === 'deny-button' ||
+       data.strategy === 'cmp-api' || data.cmpMethod === 'cmp-api');
+
     panelRemoved.innerHTML = removed > 0
       ? data.unchecked.map(item => renderItem(item, 'removed')).join('')
-      : '<div class="result-empty">No consents were removed.<br>The banner may not have been visible or already denied.</div>';
+      : isDirectDenyRun
+        ? '<div class="result-empty" style="color:#4caf50">✓ All non-essential cookies rejected via deny button.<br>No individual toggles to enumerate.</div>'
+        : '<div class="result-empty">No consents were removed.<br>The banner may not have been visible or already denied.</div>';
 
     panelKept.innerHTML = kept > 0
       ? data.mandatory.map(item => renderItem(item, 'kept')).join('')
@@ -570,7 +585,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
 async function saveToHistory(result) {
-  if (!result || result.unchecked?.length === 0) return; // Don't save empty results
+  // Save if there are enumerated items OR if direct-deny / CMP-API succeeded (no toggles to enumerate)
+  const isDirectDenySuccess = result?.success &&
+    (result.strategy === 'direct-deny' || result.cmpMethod === 'deny-button' ||
+     result.strategy === 'cmp-api' || result.cmpMethod === 'cmp-api');
+  if (!result || (result.unchecked?.length === 0 && !isDirectDenySuccess)) return;
   
   const url = result.url || window.location.href;
   const domain = extractDomain(url);

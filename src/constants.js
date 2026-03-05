@@ -332,7 +332,8 @@ export const CMPSignatures = Object.freeze({
 // =============================================================================
 export const BannerSelectors = [
   // CMP-specific (high confidence)
-  '#onetrust-consent-sdk',
+  '#onetrust-banner-sdk',      // OneTrust: the actual visible banner (container is always 0h)
+  '#onetrust-consent-sdk',     // OneTrust: outer wrapper (kept as fallback)
   '#CybotCookiebotDialog',
   '#usercentrics-root',    // Usercentrics shadow host (UC v2 / Smart Data Protector)
   '#uc-main-dialog',       // Usercentrics: actual dialog rendered inside shadow DOM
