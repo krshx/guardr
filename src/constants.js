@@ -90,6 +90,13 @@ export const Signals = Object.freeze({
     // English — core verbs
     'reject', 'deny', 'decline', 'refuse', 'disagree', 'opt out', 'opt-out',
     'reject all', 'deny all', 'refuse all', 'decline all',
+    // Legitimate Interest objection text (inside LI sub-panels)
+    'object all', 'object to all', 'opt out of all', 'opt out all',
+    'object to legitimate interest', 'object to legitimate interests',
+    'object to all legitimate interests', 'oppose all',
+    // multilingual LI objection
+    'widersprechen', "s'opposer", 'bezwaar maken', 'opponer', 'opsonere',
+
     // English — "X only" variants (string match handles simple cases; DenyPatterns handles
     // variations with intervening words like "essential cookies only")
     'necessary only', 'essential only', 'required only', 'functional only',
@@ -180,6 +187,8 @@ export const Signals = Object.freeze({
     'manage cookies', 'cookie preferences', 'privacy preferences',
     'advanced', 'details', 'learn more', 'more info', 'privacy options',
     'detailed settings', 'customise', 'customise cookies',
+    // Legitimate Interest sub-tabs (clicked after main settings panel opens)
+    'legitimate interests', 'legitimate interest', 'partners',
     // German
     'einstellungen', 'anpassen', 'verwalten', 'optionen', 'konfigurieren',
     // French
@@ -198,6 +207,8 @@ export const Signals = Object.freeze({
     // English
     'save', 'confirm', 'apply', 'save settings', 'save preferences',
     'confirm choices', 'save my choices', 'save selection', 'done',
+    'save and exit', 'save & exit', 'save and close', 'save & close',
+    'continue', 'continue without accepting',
     // German
     'speichern', 'bestätigen', 'übernehmen', 'auswahl speichern',
     // French
@@ -258,6 +269,9 @@ export const DenyPatterns = Object.freeze([
   // "no thanks" / "no, thank you" and multilingual variants
   // Covers: "no thanks", "no, thank you", "nein danke", "non merci", "no gracias"
   /\bno[,.\s]+\s*(thanks|thank\s+you|danke|merci|gracias|grazie|bedankt)\b/i,
+
+  // Legitimate Interest objection — these appear inside LI sub-panels
+  /\b(object|oppose|widerspruch|widersprechen|bezwaar|s'opposer|opuster)\b[\s\w]*(all|tout|alle|alles)?/i,
 
   // Minimum/minimal — some CMPs label their deny button "The minimum" or "minimal cookies"
   /\b(minimum|minimal)\b[\s\w]*(cookie|track|data|consent|advertis)/i,

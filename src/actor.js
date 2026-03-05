@@ -758,7 +758,7 @@ export class Actor {
   async _executeSettingsStrategy(plan, result) {
     for (const btn of plan.settingsButtons) {
       if (!isElementVisible(btn.element)) continue;
-      
+
       // Skip links that navigate to a different page. A settings button on a banner
       // should expand an inline panel — if it's a full-page link, clicking it would
       // abandon the banner and leave the user on a preferences page with no further
@@ -767,25 +767,143 @@ export class Actor {
         log.debug('Skipping settings button — it is a page-navigation link:', btn.element.href);
         continue;
       }
-      
+
       const clicked = clickElement(btn.element);
       if (clicked) {
         result.recordAction('click-settings', { score: btn.score });
         await this._waitForUI(Timing.SETTINGS_EXPAND_TIME);
-        
-        const newPlan = this._analyzer.analyze(plan.banner);
-        
+
+        // Re-analyze after panel expanded
+        let newPlan = this._analyzer.analyze(plan.banner);
+
+        // --- Legitimate Interest sub-tab handling ---
+        // After opening the main settings panel, look for LI sub-tabs
+        // (e.g. "Legitimate Interests" tab on Bristolpost/Quantcast TCF banners).
+        // We must object to LI separately — "Reject All" on the main banner often
+        // only withdraws consent, not legitimate interest.
+        const liSuccess = await this._handleLegitimateInterestTab(plan.banner, result);
+        if (liSuccess) {
+          log.info('Legitimate Interest objection completed');
+          // Re-analyze again after handling LI tab (panel may have changed)
+          newPlan = this._analyzer.analyze(plan.banner);
+        }
+        // --- End LI handling ---
+
         if (newPlan.toggles.length > 0) {
           return await this._executeToggleStrategy(newPlan, result, true);
         }
-        
+
         if (newPlan.denyButtons.length > 0) {
           return await this._executeDenyStrategy(newPlan, result);
         }
+
+        // Even if we only handled LI, try to save/close
+        if (liSuccess) {
+          const saved = await this._clickSaveButton(newPlan, result);
+          if (saved) {
+            result.bannerClosed('li-object-save');
+            return true;
+          }
+          // Force close as fallback
+          if (!isElementVisible(plan.banner)) {
+            result.bannerClosed('li-object-auto');
+            return true;
+          }
+        }
       }
     }
-    
+
     return false;
+  }
+
+  /**
+   * Handle Legitimate Interest sub-tab inside an open settings panel.
+   * Looks for an LI tab, clicks it, then clicks "Object All" / deny button within it.
+   * @param {Element} banner
+   * @param {object} result
+   * @returns {Promise<boolean>}
+   * @private
+   */
+  async _handleLegitimateInterestTab(banner, result) {
+    // LI tab selectors used by OneTrust, Quantcast, TCF 2.0 vendors
+    const liTabSelectors = [
+      '[class*="legitimate"]',
+      '[id*="legitimate"]',
+      '[data-id*="legitimate"]',
+      '[aria-label*="legitimate" i]',
+      '[aria-controls*="legitimate" i]',
+      // Quantcast
+      '[class*="li-tab"]',
+      '[class*="LegitimateInterest"]',
+    ];
+
+    let liTab = null;
+    for (const sel of liTabSelectors) {
+      try {
+        const candidate = banner.querySelector(sel);
+        if (candidate && isElementVisible(candidate)) {
+          liTab = candidate;
+          break;
+        }
+      } catch { /**/ }
+    }
+
+    // Also look for any visible tab/button whose text signals LI
+    if (!liTab) {
+      const allButtons = Array.from(banner.querySelectorAll('button, [role="tab"], a, [role="button"]'));
+      liTab = allButtons.find(el => {
+        if (!isElementVisible(el)) return false;
+        const t = (el.textContent || '').toLowerCase().trim();
+        return t.includes('legitimate interest') || t.includes('legitimate interests') ||
+               t === 'partners' || t.includes('berechtigtes interesse');
+      }) || null;
+    }
+
+    if (!liTab) return false;
+
+    log.info('Found LI tab — clicking:', liTab.textContent?.trim());
+    clickElement(liTab);
+    result.recordAction('click-li-tab', { label: liTab.textContent?.trim() });
+    await this._waitForUI(Timing.SETTINGS_EXPAND_TIME);
+
+    // Look for "Object All" / deny button inside the now-active LI panel
+    const objectSelectors = [
+      '[class*="object-all"]', '[id*="object-all"]',
+      '[class*="objectAll"]',  '[id*="objectAll"]',
+      '[class*="reject-all"]', '[class*="rejectAll"]',
+      '[aria-label*="object" i]',
+    ];
+
+    let objectBtn = null;
+    for (const sel of objectSelectors) {
+      const candidate = banner.querySelector(sel);
+      if (candidate && isElementVisible(candidate)) { objectBtn = candidate; break; }
+    }
+
+    if (!objectBtn) {
+      // Fallback: button whose text is an LI-objection signal
+      const allBtns = Array.from(banner.querySelectorAll('button, [role="button"]'));
+      objectBtn = allBtns.find(el => {
+        if (!isElementVisible(el)) return false;
+        const t = (el.textContent || '').toLowerCase().trim();
+        return t.includes('object all') || t.includes('object to all') ||
+               t.includes('opt out of all') || t.startsWith('object') ||
+               t === 'widersprechen' || t === "s'opposer" || t === 'bezwaar maken';
+      }) || null;
+    }
+
+    if (!objectBtn) {
+      log.debug('LI tab found but no Object All button visible');
+      return false;
+    }
+
+    log.info('Clicking LI Object All:', objectBtn.textContent?.trim());
+    clickElement(objectBtn);
+    result.recordAction('li-object-all', { label: objectBtn.textContent?.trim() });
+    result.addDenied({ label: 'All legitimate interests', type: 'Legitimate Interest', category: 'li-object-all' });
+    await this._waitForUI(Timing.CLICK_SETTLE_TIME);
+
+    return true;
   }
   
   /**

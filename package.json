@@ -1,6 +1,6 @@
 {
   "name": "guardr",
-  "version": "3.1.21",
+  "version": "3.1.22",
   "description": "Guardr - Autonomous cookie consent denier with self-learning",
   "scripts": {
     "build": "node build.js",

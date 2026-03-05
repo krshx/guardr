@@ -195,19 +195,24 @@ class Orchestrator {
 
       // Report result
       await this._reportResult();
-      
+
     } catch (err) {
       log.error('Error handling banner:', err.message);
       this._result.addError('Processing', err.message);
       this._machine.transition(State.FAILED, { error: err.message });
       await this._reportResult();
-      
+
     } finally {
       if (_processingSucceeded) {
         this._processAttempts = 0;
       } else {
         this._processAttempts++;
-        this._detector.markFailed(banner);
+        // Only blacklist the banner's id/class after 2 failures, not after the first.
+        // The first failure is often a timing issue (banner not fully rendered).
+        // Amazon and similar lazy-loading banners need a second chance.
+        if (this._processAttempts >= 2) {
+          this._detector.markFailed(banner);
+        }
         if (this._processAttempts >= 3) {
           log.warn('[Guardr] Max attempts reached — scanner paused for this page');
         }
