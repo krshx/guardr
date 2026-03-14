@@ -29,6 +29,7 @@ temp/
 # Internal documentation (exclude from public repo)
 *.md
 !README.md
+!.github/copilot-instructions.md
 
 # Dashboard with credentials (keep local only)
 dashboard.html
