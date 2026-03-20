@@ -110,6 +110,17 @@ export class Detector extends EventTarget {
       log.debug('Selector scan: no matches — trying broad scan');
     }
 
+    // Direct dialog scan: role=dialog/alertdialog elements are always checked
+    // regardless of CSS positioning — catches CMPs that use semantic dialog roles.
+    const dialogs = document.querySelectorAll('[role="dialog"], [role="alertdialog"]');
+    for (const d of dialogs) {
+      if (this._isValidBanner(d)) {
+        log.info('Banner detected via role=dialog');
+        this._emitDetection(d);
+        return;
+      }
+    }
+
     // Broad scan fallback: fixed/sticky positioned elements likely to be consent overlays
     this._broadScan();
 
@@ -141,16 +152,19 @@ export class Detector extends EventTarget {
 
       // Must be fixed/sticky AND have a meaningful z-index.
       // Require BOTH conditions to reduce false positives on nav bars etc.
+      // Third path: full-viewport banners (e.g. Meta/Threads) that use
+      // position:relative but cover the entire screen.
+      const rect = el.getBoundingClientRect();
+      const isFullViewport = rect.width >= window.innerWidth * 0.8
+        && rect.height >= window.innerHeight * 0.5
+        && rect.top === 0;
       const isOverlay = (
         (pos === 'fixed' || pos === 'sticky') && zIndex >= 10
-      ) || (
-        zIndex >= 99999
-      );
+      ) || zIndex >= 99999 || isFullViewport;
       if (!isOverlay) continue;
 
       // Must be a plausible banner size.
       // Too small → tooltip/widget. Too tall → full-screen panel or SPA shell, not a banner.
-      const rect = el.getBoundingClientRect();
       if (rect.width < 280 || rect.height < 60 || rect.height > window.innerHeight * 0.8) continue;
 
       // Must contain at least one interactive element — a banner without any
