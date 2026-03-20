@@ -317,6 +317,12 @@ if (args.includes('--minor')) {
   incrementVersion('patch');
 }
 
+// --version-only: bump version and exit without bundling.
+// Used by build:minor and build:patch so esbuild can do the actual bundle.
+if (args.includes('--version-only')) {
+  process.exit(0);
+}
+
 if (args.includes('--watch')) {
   watch();
 } else {

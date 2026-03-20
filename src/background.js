@@ -58,6 +58,17 @@ async function handleMessage(message, sender) {
       if (tabId && tabResults.has(tabId)) {
         return tabResults.get(tabId);
       }
+      // Fallback: session storage (survives service worker restarts)
+      if (tabId) {
+        try {
+          const stored = await chrome.storage.session.get(`tabResult_${tabId}`);
+          const r = stored[`tabResult_${tabId}`];
+          if (r) {
+            tabResults.set(tabId, r); // restore to in-memory map
+            return r;
+          }
+        } catch (_) { /* session storage not available */ }
+      }
       return null;
     }
       
@@ -93,7 +104,7 @@ async function handleScanComplete(result, tab) {
     url: result.url,
     bannerFound: result.bannerFound,
     bannerClosed: result.bannerClosed,
-    denied: result.unchecked?.length || 0
+    denied: result.totalDenied ?? result.unchecked?.length ?? 0
   });
   
   // Cache result for this tab (for popup to retrieve)
@@ -103,6 +114,11 @@ async function handleScanComplete(result, tab) {
       timestamp: Date.now()
     };
     tabResults.set(tab.id, cachedResult);
+
+    // Persist to session storage so result survives service worker restarts
+    try {
+      await chrome.storage.session.set({ [`tabResult_${tab.id}`]: cachedResult });
+    } catch (_) { /* session storage not available in this context */ }
     
     // Clean up old entries (keep max 50 tabs)
     if (tabResults.size > 50) {
@@ -115,6 +131,9 @@ async function handleScanComplete(result, tab) {
   
   // Save to history
   await saveToHistory(result);
+
+  // Also save in popup-compatible format so history/dashboard tabs always reflect auto-scans
+  await saveToPopupHistory(result);
   
   // Update stats
   await updateStats(result);
@@ -152,7 +171,7 @@ async function saveToHistory(result) {
       unchecked: result.unchecked || [],
       mandatory: result.mandatory || [],
       errors: result.errors || [],
-      denialCount: result.unchecked?.length || 0,
+      denialCount: result.totalDenied ?? result.unchecked?.length ?? 0,
       consentDenials: result.consentDenials || 0,
       legitimateInterestDenials: result.legitimateInterestDenials || 0,
       vendorDenials: result.vendorDenials || 0,
@@ -185,9 +204,78 @@ async function getHistory() {
   }
 }
 
+/**
+ * Save result to the popup-compatible 'denyHistory' storage key so that
+ * auto-scans (where the popup is closed) still appear in the history and
+ * dashboard tabs.  Mirrors the schema used by popup.js saveToHistory().
+ */
+async function saveToPopupHistory(result) {
+  try {
+    const isDirectDenySuccess = result?.success &&
+      (result.strategy === 'direct-deny' || result.cmpMethod === 'deny-button' ||
+       result.strategy === 'cmp-api'      || result.cmpMethod === 'cmp-api');
+
+    // Temporary debug: verify payload values arriving from content script
+    console.log('[Guardr BG] saveToPopupHistory payload:', {
+      bannerFound:  result.bannerFound,
+      bannerClosed: result.bannerClosed,
+      totalDenied:  result.totalDenied,
+      consentDenials: result.consentDenials,
+      legitimateInterestDenials: result.legitimateInterestDenials,
+      success: result.success,
+      strategy: result.strategy,
+      cmpMethod: result.cmpMethod
+    });
+
+    // Only record if a banner was found, denials were recorded, or direct-deny succeeded
+    const totalDenied = result.totalDenied ?? 0;
+    if (!result.bannerFound && totalDenied === 0 && !isDirectDenySuccess) return;
+
+    const { denyHistory: history = [] } = await chrome.storage.local.get('denyHistory');
+
+    const url = result.url || '';
+    const domain = extractDomain(url);
+
+    // Deduplicate: skip if the same URL was saved by the popup within the last 5 seconds
+    const recent = history[0];
+    if (recent && recent.url === url && Date.now() - recent.timestamp < 5000) return;
+
+    const historyItem = {
+      id: Date.now(),
+      domain,
+      url,
+      timestamp: Date.now(),
+      denied:                    result.totalDenied ?? result.unchecked?.length ?? 0,
+      consentDenials:            result.consentDenials ?? 0,
+      legitimateInterestDenials: result.legitimateInterestDenials ?? 0,
+      vendorDenials:             result.vendorDenials ?? 0,
+      otherDenials:              result.otherDenials ?? 0,
+      kept: result.mandatory?.length || 0,
+      cmp: result.cmpDetected || 'Unknown',
+      method: result.cmpMethod || 'auto',
+      runtime: result.runtime || 0,
+      bannerFound: result.bannerFound || false,
+      bannerClosed: result.bannerClosed || false,
+      actionLog: result.actionsPerformed || [],
+      consentOrPay: result.consentOrPay || false
+    };
+
+    history.unshift(historyItem);
+
+    // Expire entries older than 30 days (matches popup HISTORY_EXPIRY_DAYS)
+    const expiryTime = Date.now() - (30 * 24 * 60 * 60 * 1000);
+    const trimmed = history.filter(item => item.timestamp > expiryTime);
+
+    await chrome.storage.local.set({ denyHistory: trimmed });
+    console.log('[Guardr BG] Saved to popup history:', domain);
+  } catch (err) {
+    console.error('[Guardr BG] Failed to save popup history:', err.message);
+  }
+}
+
 async function clearHistory() {
   try {
-    await chrome.storage.local.set({ [STORAGE_KEYS.HISTORY]: [] });
+    await chrome.storage.local.set({ [STORAGE_KEYS.HISTORY]: [], denyHistory: [] });
     return { success: true };
   } catch (err) {
     return { success: false, error: err.message };
@@ -211,7 +299,7 @@ async function updateStats(result) {
     
     if (result.bannerClosed) {
       stats.totalBannersClosed++;
-      stats.totalDenials += result.unchecked?.length || 0;
+      stats.totalDenials += result.totalDenied ?? result.unchecked?.length ?? 0;
       stats.consentDenials += result.consentDenials || 0;
       stats.legitimateInterestDenials += result.legitimateInterestDenials || 0;
       stats.vendorDenials += result.vendorDenials || 0;
@@ -297,7 +385,7 @@ async function updateSettings(newSettings) {
 function getDefaultSettings() {
   return {
     enabled: true,
-    autoRun: true,
+    autoMode: true,
     showNotifications: true,
     telemetryEnabled: false,
     debugMode: false
@@ -312,7 +400,7 @@ async function updateBadge(tabId, result) {
   try {
     if (result.bannerClosed) {
       // Success - green badge with count
-      const count = result.unchecked?.length || 0;
+      const count = result.totalDenied ?? result.unchecked?.length ?? 0;
       await chrome.action.setBadgeText({ 
         tabId, 
         text: count > 0 ? count.toString() : '✓' 
@@ -377,7 +465,7 @@ async function sendTelemetry(result) {
       version: chrome.runtime.getManifest().version,
       domain: domain || 'unknown',
       cmp_type: sanitizeCmp(result.cmpDetected),
-      denied_count: Math.min(result.unchecked?.length || 0, 9999),
+      denied_count: Math.min(result.totalDenied ?? result.unchecked?.length ?? 0, 9999),
       kept_count: Math.min(result.mandatory?.length || 0, 100),
       banner_closed: result.bannerClosed === true,
       consent_denials: Math.min(result.consentDenials || 0, 9999),
@@ -464,14 +552,16 @@ function extractDomain(url) {
 // =============================================================================
 
 // Clean up cached results when tab is closed
-chrome.tabs.onRemoved.addListener((tabId) => {
+chrome.tabs.onRemoved.addListener(async (tabId) => {
   tabResults.delete(tabId);
+  try { await chrome.storage.session.remove(`tabResult_${tabId}`); } catch (_) {}
 });
 
 // Clear cached result when tab navigates to new page
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   if (changeInfo.url) {
     tabResults.delete(tabId);
+    try { await chrome.storage.session.remove(`tabResult_${tabId}`); } catch (_) {}
   }
 });
 

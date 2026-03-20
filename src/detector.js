@@ -3,8 +3,9 @@
  * Event-driven banner detection using MutationObserver
  */
 
-import { BannerSelectors, CMPSignatures, CMPContainerPatterns, PaywallSignals, Events, Timing } from './constants.js';
+import { BannerSelectors, CMPSignatures, CMPContainerPatterns, PaywallSignals, Events, Timing, State } from './constants.js';
 import { isElementVisible, debounce, getElementText, log } from './utils.js';
+import { getStateMachine } from './state-machine.js';
 
 /**
  * Event-driven consent banner detector
@@ -15,6 +16,7 @@ export class Detector extends EventTarget {
     this._observer = null;
     this._detectedBanners = new WeakSet();
     this._knownFailedIds = new Set(); // id/class fingerprints of banners that already failed
+    this._recentlyActed = new Map(); // fingerprint → timestamp, for loop-break guard
     this._isRunning = false;
     this._iframeObservers = [];
   }
@@ -37,10 +39,10 @@ export class Detector extends EventTarget {
     // Watch for iframes
     this._watchIframes();
 
-    // Late re-scans for CMPs that inject banners asynchronously
-    // (1 s, 2 s, 4 s after start)
-    const RESCAN_DELAYS = [1000, 2000, 4000, 7000]; // FIXED: Added 7s for Sourcepoint
-    for (const delay of RESCAN_DELAYS) {
+    // Late re-scans for CMPs that inject banners asynchronously.
+    // Uses Timing.RESCAN_DELAYS from constants.js [1000, 2000, 4000, 7000, 15000].
+    // The 15s entry catches Sourcepoint, Blazor SPAs, and lazy-hydrated pages.
+    for (const delay of Timing.RESCAN_DELAYS) {
       setTimeout(() => {
         if (this._isRunning && this._detectedBanners) {
           log.debug(`Late scan at +${delay}ms`);
@@ -73,6 +75,14 @@ export class Detector extends EventTarget {
    * @private
    */
   _scanExisting() {
+    // Do not re-evaluate banners while the navigator is already acting on one.
+    // Mutations triggered by settings panel transitions would otherwise cause the
+    // detector to reject the new panel (no deny button → hasDenySignal=false).
+    const currentState = getStateMachine().state;
+    if (currentState !== State.IDLE && currentState !== State.DETECTED) {
+      log.debug(`Scan skipped — state is ${currentState}`);
+      return;
+    }
     log.debug('Scanning DOM for consent banners...');
     let selectorHits = 0;
 
@@ -131,8 +141,38 @@ export class Detector extends EventTarget {
 
       // Must be fixed/sticky AND have a meaningful z-index.
       // Require BOTH conditions to reduce false positives on nav bars etc.
-      const isOverlay = (pos === 'fixed' || pos === 'sticky') && zIndex >= 100;
+      const isOverlay = (
+        (pos === 'fixed' || pos === 'sticky') && zIndex >= 10
+      ) || (
+        zIndex >= 99999
+      );
       if (!isOverlay) continue;
+
+      // Must be a plausible banner size.
+      // Too small → tooltip/widget. Too tall → full-screen panel or SPA shell, not a banner.
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 280 || rect.height < 60 || rect.height > window.innerHeight * 0.8) continue;
+
+      // Must contain at least one interactive element — a banner without any
+      // button or link has no consent action to take.
+      const hasInteractiveChildren = el.querySelectorAll(
+        'button, a, input[type="checkbox"], [role="button"]'
+      ).length > 0;
+      if (!hasInteractiveChildren) continue;
+
+      // On Google domains, require that consent keywords appear in direct child
+      // text — not only in deep descendants (image captions, search result titles).
+      // This is a structural check triggered by hostname, not a site blacklist.
+      if (window.location.hostname.includes('google.')) {
+        const directChildText = [...el.children]
+          .flatMap(child => [...child.childNodes]
+            .filter(n => n.nodeType === Node.TEXT_NODE)
+            .map(n => n.textContent))
+          .join(' ')
+          .toLowerCase();
+        const consentSignals = ['cookie', 'consent', 'gdpr', 'personal data', 'your data'];
+        if (!consentSignals.some(s => directChildText.includes(s))) continue;
+      }
 
       // Broad scan requires STRICTER content validation than selector scan.
       // Must contain at least 2 distinct consent-related keywords to avoid
@@ -164,16 +204,59 @@ export class Detector extends EventTarget {
    * @private
    */
   _hasSufficientConsentContent(el) {
-    const text = (el.textContent || '').toLowerCase();
+    // Extract text only from direct text nodes of semantic block elements
+    // and one level of immediate children. Using el.textContent traverses the
+    // full subtree and would match 'cookie' from image captions, search result
+    // titles, or other non-consent content nested deep in the element.
+    const textParts = [];
+    el.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, label, legend, [role="heading"]').forEach(node => {
+      for (const child of node.childNodes) {
+        if (child.nodeType === Node.TEXT_NODE) textParts.push(child.textContent);
+      }
+    });
+    // Also capture direct text nodes of the element and its immediate children
+    // so simple banners (e.g. <div><span>We use cookies</span><button>…</button></div>)
+    // are still detected even without block-level markup.
+    for (const node of [el, ...el.children]) {
+      for (const child of node.childNodes) {
+        if (child.nodeType === Node.TEXT_NODE && child.textContent.trim()) {
+          textParts.push(child.textContent);
+        }
+      }
+    }
+    const text = (textParts.length > 0 ? textParts.join(' ') : el.textContent || '').toLowerCase();
+
     const primarySignals = [
       'cookie', 'consent', 'gdpr', 'personal data', 'your data',
       'datenschutz', 'données personnelles', 'privacidad'
     ];
     // 'privacy' alone is too common (footers, nav links) — only count alongside others
-    const hits = primarySignals.filter(s => text.includes(s)).length;
-    // Also require a deny/reject-flavoured word to confirm it's an actionable banner
-    const hasDenySignal = /(reject|deny|decline|refuse|necessary only|opt.?out|ablehnen|refuser|rechazar)/i.test(text);
-    return hits >= 1 && hasDenySignal;
+    const matchedPrimary = primarySignals.filter(s => text.includes(s));
+    const hits = matchedPrimary.length;
+    // Also require a deny/reject-flavoured word to confirm it's an actionable banner.
+    // Includes "just necessary/essential" — CWJobs uses "Just Necessary" as the reject label.
+    const denyPattern = /(reject|deny|decline|refuse|necessary only|essential only|essential cookies only|just\s+(necessary|essential|required)|opt.?out|ablehnen|refuser|rechazar)/i;
+    const hasDenySignal = denyPattern.test(text);
+    // Option C: banner contains a manage/preference/settings entry point
+    const managePattern = /manage|preference|setting|customis|option/i;
+    const hasManageSignal = !![...el.querySelectorAll('button,a,[role="button"]')].some(btn => managePattern.test(btn.textContent));
+    // Structural complexity gate: a cookie banner is a self-contained compact unit.
+    // Elements with many descendants are page sections, not banners.
+    // Exception: very strong signals (3+ keywords + deny text) in a moderately
+    // complex element (e.g. a multi-section consent centre < 200 nodes).
+    const childCount = el.querySelectorAll('*').length;
+    if (childCount > 50 && !(hits >= 3 && hasDenySignal && childCount < 200)) {
+      log.debug(`  [consent-check] rejected — too complex: childCount=${childCount}, hits=${hits}, deny=${hasDenySignal}`);
+      return false;
+    }
+
+    // Pass if any one of A/B/C holds:
+    //   A — strong: consent keyword + deny/reject text
+    //   B — dense:  two or more consent keywords
+    //   C — manage: consent keyword + manage/settings button
+    const passes = (hits >= 1 && hasDenySignal) || hits >= 2 || (hits >= 1 && hasManageSignal);
+    log.debug(`  [consent-check] <${el.tagName.toLowerCase()} id="${el.id}"> hits=${hits} [${matchedPrimary.join(',')}] deny=${hasDenySignal} manage=${hasManageSignal} childCount=${childCount} passes=${passes}`);
+    return passes;
   }
   
   /**
@@ -213,7 +296,6 @@ export class Detector extends EventTarget {
     this._observer = new MutationObserver((mutations) => {
       // Quick check: any new nodes added?
       let hasNewNodes = false;
-      let hasVisibilityChange = false;
       
       for (const mutation of mutations) {
         if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
@@ -231,8 +313,7 @@ export class Detector extends EventTarget {
         }
         
         if (mutation.type === 'attributes') {
-          // Visibility might have changed
-          hasVisibilityChange = true;
+          // Visibility might have changed — no rescan needed (see comment below)
         }
       }
       
@@ -320,6 +401,21 @@ export class Detector extends EventTarget {
       return false;
     }
 
+    // Navigation/header guard — account dropdowns, nav menus, etc. are never consent banners
+    if (el.closest('nav, header')) {
+      log.debug(`  ✗ inside nav/header: <${el.tagName.toLowerCase()} id="${el.id}">`);
+      return false;
+    }
+
+    // Menu/popup widget guard — reject elements that are part of a navigation dropdown
+    const isInsideMenuWidget = !!el.closest('[aria-haspopup], [role="menu"], [role="menuitem"]');
+    const isInsideOpenDropdown = !!el.closest('[aria-expanded="true"]');
+    const containsMenuRole = !!(el.querySelector('[role="menu"], [role="menuitem"]'));
+    if (isInsideMenuWidget || isInsideOpenDropdown || containsMenuRole) {
+      log.debug(`  ✗ navigation dropdown/menu widget: <${el.tagName.toLowerCase()} id="${el.id}">`);
+      return false;
+    }
+
     // Not visible?
     if (!isElementVisible(el)) {
       log.debug(`  ✗ not visible: <${el.tagName.toLowerCase()} id="${el.id}">`);
@@ -341,12 +437,13 @@ export class Detector extends EventTarget {
     
     // Content analysis - must contain consent-related text
     const text = (el.textContent || '').toLowerCase();
-    const hasConsentText = 
+    const hasConsentText =
       text.includes('cookie') ||
       text.includes('consent') ||
       text.includes('privacy') ||
       text.includes('gdpr') ||
       text.includes('tracking') ||
+      text.includes('preferences') ||
       text.includes('personal data') ||
       text.includes('your data') ||
       text.includes('datenschutz') ||
@@ -378,8 +475,6 @@ export class Detector extends EventTarget {
   _isKnownCMPContainer(el) {
     const id = el.id || '';
     const cls = (typeof el.className === 'string' ? el.className : '') || '';
-    const combined = `${id} ${cls}`;
-
     // Check against known regex patterns
     for (const pattern of CMPContainerPatterns) {
       if (pattern.test(id) || pattern.test(cls)) return true;
@@ -501,8 +596,33 @@ export class Detector extends EventTarget {
     log.debug(`Detector: marked as known-failed — #${el.id || '?'} .${cls.slice(0, 40)}`);
   }
 
+  /**
+   * Build a stable string fingerprint for an element (tag + id + first 3 classes)
+   * @param {Element} el
+   * @returns {string}
+   * @private
+   */
+  _getElementFingerprint(el) {
+    const tag = el.tagName?.toLowerCase() || 'unknown';
+    const id = el.id ? `#${el.id}` : '';
+    const cls = typeof el.className === 'string' && el.className.trim()
+      ? `.${el.className.trim().split(/\s+/).slice(0, 3).join('.')}`
+      : '';
+    return `${tag}${id}${cls}` || tag;
+  }
+
   _emitDetection(banner, meta = {}) {
     if (this._detectedBanners.has(banner)) return;
+
+    // Loop-break guard: skip if the same element fingerprint was emitted within 3 seconds
+    const fp = this._getElementFingerprint(banner);
+    const lastActed = this._recentlyActed.get(fp);
+    if (lastActed && Date.now() - lastActed < 3000) {
+      log.warn(`[Guardr] Loop guard triggered on: ${fp}`);
+      return;
+    }
+    this._recentlyActed.set(fp, Date.now());
+
     this._detectedBanners.add(banner);
     
     const cmp = this._detectCMP(banner);
@@ -529,7 +649,7 @@ export class Detector extends EventTarget {
    */
   _detectCMP(banner) {
     // Check DOM signatures
-    for (const [key, config] of Object.entries(CMPSignatures)) {
+    for (const [, config] of Object.entries(CMPSignatures)) {
       for (const selector of config.selectors) {
         try {
           if (banner.matches(selector) || banner.querySelector(selector) || document.querySelector(selector)) {
@@ -542,7 +662,7 @@ export class Detector extends EventTarget {
     }
     
     // Check global variables
-    for (const [key, config] of Object.entries(CMPSignatures)) {
+    for (const [, config] of Object.entries(CMPSignatures)) {
       for (const global of config.globals) {
         if (typeof window[global] !== 'undefined') {
           return config.name;
@@ -602,7 +722,8 @@ export class Detector extends EventTarget {
   rescan() {
     log.info('Rescanning for consent banners...');
     this._detectedBanners = new WeakSet();
-    this._knownFailedIds = new Set();
+    this._knownFailedIds  = new Set();
+    this._recentlyActed.clear();
     this._scanExisting();
   }
 }

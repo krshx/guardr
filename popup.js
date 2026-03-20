@@ -1,9 +1,8 @@
 // popup.js — DenyStealthCookies Extension
 
-// ── Debug Configuration ────────────────────────────────────────────────────
-// Set to false for production to disable all console logging
-const DEBUG = true;
-const log = DEBUG ? console.log.bind(console) : () => {};
+// ── Debug logging (runtime-activated, no hardcoded flag) ──────────────────
+let _debugEnabled = false;
+const log = (...args) => { if (_debugEnabled) console.log('[Guardr]', ...args); };
 
 document.addEventListener('DOMContentLoaded', async () => {
   const denyBtn       = document.getElementById('denyBtn');
@@ -191,20 +190,36 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         // Check if auto-denial already completed
         if (resp.autoComplete && resp.autoResult) {
-          log('[Popup] Auto-denial already completed, showing result');
+          log('[Popup] Auto-scan already completed, showing result');
           
-          // Show success status
+          const ar = resp.autoResult;
           const result = {
-            unchecked: Array(resp.autoResult.denied).fill(''), // Mock array for count
-            mandatory: Array(resp.autoResult.kept).fill(''),
-            bannerClosed: resp.autoResult.bannerClosed,
-            cmpDetected: resp.autoResult.cmp || cmps.join(', '),
-            timestamp: resp.autoResult.timestamp
+            unchecked:   Array(ar.denied || 0).fill(''),
+            mandatory:   Array(ar.kept   || 0).fill(''),
+            bannerClosed: ar.bannerClosed || false,
+            bannerFound:  ar.bannerFound  || false,
+            success:      ar.success      || false,
+            cmpDetected:  ar.cmp          || cmps.join(', '),
+            strategy:     ar.strategy     || '',
+            timestamp:    ar.timestamp
           };
-          
-          setDone(result, true); // true = isPreviousResult
-          renderResults(result);
-          noCmpNotice.classList.remove('visible');
+
+          if (ar.success || ar.bannerClosed) {
+            // Fully successful auto-scan
+            setDone(result, true);
+            renderResults(result);
+            noCmpNotice.classList.remove('visible');
+          } else if (ar.bannerFound) {
+            // Auto-scan ran but failed to close banner — show warning and keep button enabled
+            noCmpNotice.classList.remove('visible');
+            setStatus('error', 'Auto-scan ran — banner may still need attention',
+              `Strategy: ${ar.strategy || 'open-settings'} · Click the button to retry manually`);
+            if (ar.cmp) renderCmpBadges(parseCmps(ar.cmp));
+          } else {
+            // Auto-scan ran, no banner found
+            setStatus('done', 'No consent banner detected', 'Page scanned — no banner requiring action');
+            noCmpNotice.classList.remove('visible');
+          }
         } else if (cmps.length === 0 || resp.cmp === 'Generic/Unknown') {
           noCmpNotice.classList.add('visible');
           setStatus('ready', 'No standard CMP detected', `Found ${resp.toggleCount || 0} toggles — will attempt generic denial`);
@@ -261,49 +276,38 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadLearnedPatterns();
 
   // ── Teaching Mode ──────────────────────────────────────────────────────────
-  let teachingModeActive = false;
-  
   teachBtn?.addEventListener('click', async () => {
-    if (!tab?.id) return;
-    
-    // Check if content script is available before trying to use it
+    if (!tab?.id || teachBtn.disabled) return;
+
     if (!contentScriptAvailable) {
       alert('Teaching mode requires the content script to be active.\n\nThis feature is not available on:\n• Browser internal pages (chrome://, edge://)\n• Extension pages\n• File:// URLs\n\nTry navigating to a regular website first.');
       return;
     }
-    
-    if (!teachingModeActive) {
-      // Enter teaching mode
-      try {
-        await chrome.tabs.sendMessage(tab.id, { type: 'ENTER_TEACHING_MODE' });
-        teachingModeActive = true;
-        teachBtn.classList.add('teaching-active');
-        teachBtnText.textContent = 'Click the Deny Button on Page...';
-        
-        // Close popup after a short delay to let user interact with page
-        setTimeout(() => window.close(), 300);
-      } catch (err) {
-        log('Failed to enter teaching mode:', err);
-        let errorMsg;
-        if (err.message?.includes('body not available')) {
-          errorMsg = 'Page not fully loaded. Please wait a moment and try again.';
-        } else if (err.message?.includes('Receiving end does not exist')) {
-          errorMsg = 'Content script is not responding.\n\nPlease reload the page and try again.';
-        } else {
-          errorMsg = 'Could not enter teaching mode.\n\nTry reloading the page or navigating to a different website.';
-        }
-        alert(errorMsg);
-      }
-    } else {
-      // Exit teaching mode
-      try {
-        await chrome.tabs.sendMessage(tab.id, { type: 'EXIT_TEACHING_MODE' });
-        teachingModeActive = false;
-        teachBtn.classList.remove('teaching-active');
+
+    teachBtn.disabled = true;
+    teachBtn.classList.add('teaching-active');
+    teachBtnText.textContent = 'Scanning for banner...';
+
+    try {
+      const resp = await chrome.tabs.sendMessage(tab.id, { type: 'TEACH_MODE' });
+      if (resp?.patternRecorded) {
+        showTeachToast('Pattern recorded');
         teachBtnText.textContent = 'Extension Missed a Popup?';
-      } catch (err) {
-        log('Failed to exit teaching mode:', err);
+      } else {
+        teachBtnText.textContent = 'No banner found — try reloading';
+        setTimeout(() => { teachBtnText.textContent = 'Extension Missed a Popup?'; }, 3000);
       }
+    } catch (err) {
+      log('TEACH_MODE failed:', err);
+      let msg = 'Could not run. Try reloading the page.';
+      if (err.message?.includes('Receiving end does not exist')) {
+        msg = 'Content script is not responding. Please reload and try again.';
+      }
+      teachBtnText.textContent = msg;
+      setTimeout(() => { teachBtnText.textContent = 'Extension Missed a Popup?'; }, 3000);
+    } finally {
+      teachBtn.disabled = false;
+      teachBtn.classList.remove('teaching-active');
     }
   });
 
@@ -349,6 +353,21 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     });
   });
+
+  // ── Always-visible tab bar ────────────────────────────────────────────────
+  // Show the tab bar immediately on load. HISTORY and ANALYTICS are always
+  // accessible. DENIED / KEPT / ERRORS are dimmed and disabled until a denial
+  // has run in this session (or a previous result from this session was loaded).
+  resultsSection.classList.add('visible');
+  if (!previousResultShown) {
+    // Dim result-only tabs — no denial data yet
+    ['tabRemoved', 'tabKept', 'tabErrors'].forEach(id => {
+      const t = document.getElementById(id);
+      if (t) t.disabled = true;
+    });
+    // Default to History tab so the user has something useful to see
+    switchToHistoryTab();
+  }
 
   // ── Deny button ───────────────────────────────────────────────────────────
   denyBtn.addEventListener('click', async () => {
@@ -418,7 +437,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     denyBtn.disabled = false;
     btnText.textContent = 'Denying all consents...';
     setStatus('running', 'Working...', 'Finding toggles, unchecking non-essential, closing banner');
-    resultsSection.classList.remove('visible');
     bannerStatus.className = 'banner-status';
     bannerStatus.textContent = '';
   }
@@ -429,7 +447,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     denyBtn.disabled = true;
     btnText.textContent = '✓ All Non-Essential Consents Denied';
 
-    const removed = result.unchecked?.length || 0;
+    const removed = result.totalDenied
+      ?? (((result.consentDenials || 0) + (result.legitimateInterestDenials || 0))
+        || result.unchecked?.length
+        || 0);
     const kept    = result.mandatory?.length || 0;
     const errs    = result.errors?.length || 0;
     const method  = result.cmpMethod ? ` via ${result.cmpMethod}` : '';
@@ -494,6 +515,23 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     resultsSection.classList.add('visible');
 
+    // Enable result tabs and switch to Denied for fresh denial runs.
+    // For previous results (isPreviousResult=true), the tab state was already
+    // set at init time — setDone was called before the init block ran.
+    if (!isPreviousResult) {
+      ['tabRemoved', 'tabKept', 'tabErrors'].forEach(id => {
+        const t = document.getElementById(id);
+        if (t) t.disabled = false;
+      });
+      // Switch active tab to Denied
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      const td = document.getElementById('tabRemoved');
+      const pd = document.getElementById('panelRemoved');
+      if (td) td.classList.add('active');
+      if (pd) pd.classList.add('active');
+    }
+
     // Update CMP badges from result
     if (result.cmpDetected) renderCmpBadges(parseCmps(result.cmpDetected));
   }
@@ -506,7 +544,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function renderResults(data) {
-    const removed = data.unchecked?.length || 0;
+    const removed = data.totalDenied ?? data.unchecked?.length ?? 0;
     const kept    = data.mandatory?.length || 0;
     const errs    = data.errors?.length || 0;
 
@@ -590,7 +628,7 @@ async function saveToHistory(result) {
   const isDirectDenySuccess = result?.success &&
     (result.strategy === 'direct-deny' || result.cmpMethod === 'deny-button' ||
      result.strategy === 'cmp-api' || result.cmpMethod === 'cmp-api');
-  if (!result || (result.unchecked?.length === 0 && !isDirectDenySuccess)) return;
+  if (!result || ((result.totalDenied ?? result.unchecked?.length ?? 0) === 0 && !isDirectDenySuccess)) return;
   
   const url = result.url || window.location.href;
   const domain = extractDomain(url);
@@ -628,7 +666,7 @@ async function saveToHistory(result) {
     domain,
     url,
     timestamp: Date.now(),
-    denied: uncheckedItems.length,
+    denied: result.totalDenied ?? uncheckedItems.length,
     consentDenials,
     legitimateInterestDenials,
     otherDenials,
@@ -638,7 +676,7 @@ async function saveToHistory(result) {
     runtime: result.runtime || 0,
     bannerFound: result.bannerFound || false,
     bannerClosed: result.bannerClosed || false,
-    actionLog: result.actionLog || [],  // Detailed action log
+    actionLog: result.actionsPerformed || [],  // Detailed action log
     consentOrPay: result.consentOrPay || false  // Consent-or-pay detection
   };
   
@@ -656,6 +694,8 @@ async function saveToHistory(result) {
 }
 
 async function loadHistory() {
+  historyList.innerHTML = '<div class="result-empty result-loading">Loading…</div>';
+  historyStats.textContent = '';
   const data = await chrome.storage.local.get('denyHistory');
   let history = data.denyHistory || [];
   
@@ -902,7 +942,7 @@ function switchToHistoryTab() {
 async function clearHistory() {
   if (!confirm('Clear all history? This cannot be undone.')) return;
   
-  await chrome.storage.local.set({ denyHistory: [] });
+  await chrome.storage.local.set({ denyHistory: [], guardr_history: [] });
   clearFilter(); // Also clear any active filter
   loadHistory();
 }
@@ -1359,35 +1399,34 @@ function createTopSitesChart(history) {
 // ── Learning Analytics ────────────────────────────────────────────────────
 async function loadLearningAnalytics() {
   try {
-    // Load learning data from storage
-    const data = await chrome.storage.local.get(['globalLearnedPatterns', 'customSemanticPatterns']);
-    const globalPatterns = data.globalLearnedPatterns || {};
-    const customPatterns = data.customSemanticPatterns || {};
-    
-    // Calculate statistics
-    const allPatterns = Object.values(globalPatterns);
+    // Patterns are stored under guardr_patterns_v3 by the Learning engine.
+    // Each entry: { id, domain, cmp, strategy, successCount, failCount, confidence, lastUsed, created }
+    const data = await chrome.storage.local.get(['guardr_patterns_v3']);
+    const stored = data['guardr_patterns_v3'] || {};
+
+    const allPatterns = Object.values(stored);
     const totalPatterns = allPatterns.length;
-    const promotedCount = Object.keys(customPatterns).length;
+
     const uniqueDomains = new Set();
     let totalConfidence = 0;
-    
+    let promotedCount = 0; // patterns with confidence >= 90 are considered well-established
+
     allPatterns.forEach(pattern => {
-      if (pattern.domains) {
-        pattern.domains.forEach(d => uniqueDomains.add(d));
-      }
-      totalConfidence += (pattern.confidence || 0.5);
+      if (pattern.domain) uniqueDomains.add(pattern.domain);
+      totalConfidence += (typeof pattern.confidence === 'number' ? pattern.confidence : 70);
+      if ((pattern.confidence || 0) >= 90) promotedCount++;
     });
-    
-    const avgConfidence = totalPatterns > 0 
-      ? Math.round((totalConfidence / totalPatterns) * 100) 
+
+    const avgConfidence = totalPatterns > 0
+      ? Math.round(totalConfidence / totalPatterns)
       : 0;
-    
+
     // Update stat cards
     document.getElementById('totalLearnedPatterns').textContent = totalPatterns;
     document.getElementById('learningSites').textContent = uniqueDomains.size;
     document.getElementById('avgConfidence').textContent = avgConfidence + '%';
     document.getElementById('promotedPatterns').textContent = promotedCount;
-    
+
     // Render patterns view
     const viewContainer = document.getElementById('learningPatternsView');
     if (totalPatterns === 0) {
@@ -1400,23 +1439,26 @@ async function loadLearningAnalytics() {
       `;
       return;
     }
-    
-    // Sort patterns by confidence * usage
+
+    // Sort by confidence × total uses (descending)
     const sortedPatterns = allPatterns.sort((a, b) => {
-      const scoreA = (a.confidence || 0.5) * (a.usageCount || 1);
-      const scoreB = (b.confidence || 0.5) * (b.usageCount || 1);
+      const scoreA = (a.confidence || 70) * ((a.successCount || 1) + (a.failCount || 0));
+      const scoreB = (b.confidence || 70) * ((b.successCount || 1) + (b.failCount || 0));
       return scoreB - scoreA;
-    }).slice(0, 20); // Show top 20
-    
+    }).slice(0, 20);
+
     viewContainer.innerHTML = `
       <div style="font-size: 10px; color: var(--text-dim); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em;">
         Top ${Math.min(sortedPatterns.length, 20)} Patterns by Performance
       </div>
       ${sortedPatterns.map(pattern => {
-        const confidencePercent = Math.round((pattern.confidence || 0.5) * 100);
-        const isPromoted = pattern.text in customPatterns;
-        const color = confidencePercent >= 85 ? '#00e87a' : confidencePercent >= 70 ? '#ffb800' : '#8a95a8';
-        
+        const conf = Math.round(typeof pattern.confidence === 'number' ? pattern.confidence : 70);
+        const uses = (pattern.successCount || 0) + (pattern.failCount || 0);
+        const color = conf >= 85 ? '#00e87a' : conf >= 70 ? '#ffb800' : '#8a95a8';
+        const isPromoted = conf >= 90;
+        const label = pattern.strategy || pattern.cmp || 'generic';
+        const siteLabel = pattern.domain || 'unknown';
+
         return `
           <div style="
             padding: 8px 10px;
@@ -1437,11 +1479,11 @@ async function loadLearningAnalytics() {
                 text-overflow: ellipsis;
                 white-space: nowrap;
                 margin-bottom: 3px;
-              ">"${esc(pattern.text)}"</div>
+              ">${esc(siteLabel)}</div>
               <div style="display: flex; gap: 8px; font-size: 9px; color: var(--text-dim);">
-                <span>🎯 ${pattern.usageCount || 1} uses</span>
-                <span>🌍 ${pattern.domains?.length || 1} sites</span>
-                <span>📈 ${pattern.classification || 'deny'}</span>
+                <span>✅ ${pattern.successCount || 0} ok</span>
+                <span>❌ ${pattern.failCount || 0} fail</span>
+                <span>📋 ${esc(label)}</span>
               </div>
             </div>
             <div style="
@@ -1453,8 +1495,8 @@ async function loadLearningAnalytics() {
               font-size: 10px;
               font-weight: 700;
               white-space: nowrap;
-            ">${confidencePercent}%</div>
-            ${isPromoted ? '<div style="color: #9333ea; font-size: 14px;" title="Promoted to semantic library">⭐</div>' : ''}
+            ">${conf}%</div>
+            ${isPromoted ? '<div style="color: #9333ea; font-size: 14px;" title="High-confidence pattern">⭐</div>' : ''}
           </div>
         `;
       }).join('')}
@@ -1464,7 +1506,7 @@ async function loadLearningAnalytics() {
         </div>
       ` : ''}
     `;
-    
+
   } catch (err) {
     console.error('[Learning Analytics] Error loading learning analytics:', err);
     document.getElementById('learningPatternsView').innerHTML = `
@@ -1546,8 +1588,25 @@ document.getElementById('dismissDonationPrompt')?.addEventListener('click', () =
 
 // ── Settings, Donation & Telemetry ─────────────────────────────────────────
 
+function showTeachToast(msg) {
+  const toast = document.createElement('div');
+  toast.textContent = msg;
+  toast.style.cssText = 'position:fixed;bottom:52px;left:50%;transform:translateX(-50%);background:var(--surface2,#1e2530);color:var(--accent,#00e87a);padding:6px 14px;border-radius:4px;font-size:11px;font-family:var(--mono,monospace);z-index:9999;pointer-events:none;white-space:nowrap;border:1px solid rgba(0,232,122,0.25);';
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 2500);
+}
+
+function renderDebugRow(on) {
+  const row = document.getElementById('debugSettingRow');
+  if (row) row.style.display = on ? '' : 'none';
+}
+
 async function initSettings() {
   const data = await chrome.storage.local.get(['telemetryOptIn','autoMode','debugMode','donationSnoozedUntil','runCount']);
+
+  // Apply cached debug state immediately — no flash
+  _debugEnabled = data.debugMode === true;
+  renderDebugRow(_debugEnabled);
 
   // Telemetry toggle
   const telToggle = document.getElementById('telemetryToggle');
@@ -1576,12 +1635,14 @@ async function initSettings() {
     });
   }
 
-  // Debug logging toggle
+  // Debug logging toggle (only visible after easter egg activates debug mode)
   const debugToggle = document.getElementById('debugModeToggle');
   if (debugToggle) {
-    debugToggle.checked = data.debugMode === true;
+    debugToggle.checked = _debugEnabled;
     debugToggle.addEventListener('change', () => {
-      chrome.storage.local.set({ debugMode: debugToggle.checked });
+      _debugEnabled = debugToggle.checked;
+      chrome.storage.local.set({ debugMode: _debugEnabled });
+      renderDebugRow(_debugEnabled);
     });
   }
 
@@ -1601,6 +1662,33 @@ async function initSettings() {
       chrome.storage.local.set({ donationSnoozedUntil: snoozeUntil });
     });
   }
+}
+
+function initDebugEasterEgg() {
+  const el = document.getElementById('versionStr');
+  if (!el) return;
+  let clicks = 0, timer = null;
+  el.addEventListener('click', () => {
+    clicks++;
+    if (!timer) timer = setTimeout(() => { clicks = 0; timer = null; }, 3000);
+    if (clicks < 7) return;
+    // 7 rapid clicks — toggle debug mode
+    clicks = 0; clearTimeout(timer); timer = null;
+    chrome.storage.local.get('debugMode', (d) => {
+      const next = !(d.debugMode === true);
+      _debugEnabled = next;
+      chrome.storage.local.set({ debugMode: next });
+      const debugToggle = document.getElementById('debugModeToggle');
+      if (debugToggle) debugToggle.checked = next;
+      renderDebugRow(next);
+      // Toast — no persistent UI trace
+      const toast = document.createElement('div');
+      toast.textContent = next ? '🛠 Debug mode ON' : '🛠 Debug mode OFF';
+      toast.style.cssText = 'position:fixed;bottom:52px;right:10px;background:var(--surface2,#2a2a2a);color:var(--text,#e0e0e0);padding:5px 10px;border-radius:4px;font-size:10px;font-family:monospace;z-index:9999;pointer-events:none;';
+      document.body.appendChild(toast);
+      setTimeout(() => toast.remove(), 2000);
+    });
+  });
 }
 
 function initSettingsToggle() {
@@ -1634,7 +1722,7 @@ async function maybeSendTelemetry(result) {
     v:      '1.1.0',
     s:      getAnonSession(),
     cmp,
-    denied: Math.min(result.unchecked?.length || 0, 9999),
+    denied: Math.min(result.totalDenied ?? result.unchecked?.length ?? 0, 9999),
     kept:   Math.min(result.mandatory?.length || 0, 100),
     closed: result.bannerClosed ? 1 : 0,
     ts:     Math.floor(Date.now() / 1000),
@@ -1659,5 +1747,6 @@ function getAnonSession() {
 // ── Init all extras ─────────────────────────────────────────────────────────
 initSettings();
 initSettingsToggle();
+initDebugEasterEgg();
 
 });

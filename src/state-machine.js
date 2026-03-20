@@ -270,13 +270,13 @@ export class ResultBuilder {
     const key = `${item.label}|${item.type}|${item.category}`;
     if (this._processedLabels.has(key)) return this;
     this._processedLabels.add(key);
-    
+
     this._data.unchecked.push(item);
-    
+
     // Update category counts
     const type = (item.type || '').toLowerCase();
     const category = (item.category || '').toLowerCase();
-    
+
     if (type === 'consent' || category.includes('consent')) {
       this._data.consentDenials++;
     } else if (type === 'legitimate interest' || category.includes('legitimate')) {
@@ -286,7 +286,33 @@ export class ResultBuilder {
     } else {
       this._data.otherDenials++;
     }
-    
+
+    return this;
+  }
+
+  /**
+   * Record a bulk API denial where individual items are not enumerated.
+   * Increments the appropriate category counter by count and pushes one
+   * representative item to unchecked for list display.
+   * @param {number} count - total items denied
+   * @param {string} type  - 'consent' | 'legitimate interest' | 'vendor' | other
+   * @param {string|null} label - display label for the representative unchecked item
+   */
+  addBulkDenied(count, type, label = null) {
+    if (!count || count <= 0) return this;
+    const t = (type || '').toLowerCase();
+    if (t === 'consent' || t.includes('consent')) {
+      this._data.consentDenials += count;
+    } else if (t === 'legitimate interest' || t.includes('legitimate')) {
+      this._data.legitimateInterestDenials += count;
+    } else if (t === 'vendor' || t.includes('vendor')) {
+      this._data.vendorDenials += count;
+    } else {
+      this._data.otherDenials += count;
+    }
+    if (label) {
+      this._data.unchecked.push({ label, type, category: 'bulk', count });
+    }
     return this;
   }
   
@@ -341,7 +367,11 @@ export class ResultBuilder {
    * @returns {object}
    */
   build() {
-    return { ...this._data };
+    const totalDenied = this._data.consentDenials +
+                        this._data.legitimateInterestDenials +
+                        this._data.vendorDenials +
+                        this._data.otherDenials;
+    return { ...this._data, totalDenied };
   }
 }
 
@@ -360,13 +390,9 @@ export function getStateMachine() {
 }
 
 /**
- * Get or create result builder instance
+ * Return a fresh ResultBuilder on every call.
+ * No singleton — callers own their instance.
  */
-let resultInstance = null;
-
 export function getResultBuilder() {
-  if (!resultInstance) {
-    resultInstance = new ResultBuilder();
-  }
-  return resultInstance;
+  return new ResultBuilder();
 }

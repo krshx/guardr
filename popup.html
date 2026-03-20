@@ -410,6 +410,7 @@
       cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.2s;
     }
     .tab-btn:hover { color: var(--text); }
+    .tab-btn:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
     .tab-btn.active         { color: var(--accent); border-bottom-color: var(--accent); background: var(--accent-dim); }
     .tab-btn.tab-kept.active  { color: var(--warn);   border-bottom-color: var(--warn);   background: var(--warn-dim); }
     .tab-btn.tab-err.active   { color: var(--text-dim);border-bottom-color: var(--text-dim);background: var(--surface2); }
@@ -752,7 +753,7 @@
     <div class="footer-time" id="footerTime"></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <button class="settings-toggle" id="settingsToggle" title="Settings">&#9881;</button>
-      <div class="footer-note">Guardr v3.1.2</div>
+      <div class="footer-note" id="versionStr">Guardr v3.3.6</div>
     </div>
   </div>
 
@@ -787,7 +788,7 @@
           <span class="toggle-slider"></span>
         </label>
       </div>
-      <div class="setting-row">
+      <div class="setting-row" id="debugSettingRow" style="display:none">
         <div>
           <div class="setting-label">Debug logging</div>
           <div class="setting-sub">Prints detailed pipeline steps to the browser console (DevTools → Console).</div>

@@ -16,6 +16,9 @@ Thumbs.db
 *.swp
 *.swo
 
+# Build output
+dist/
+
 # Chrome extension packaging
 *.zip
 *.crx

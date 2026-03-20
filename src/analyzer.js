@@ -3,12 +3,13 @@
  * Intelligent classification of buttons and toggles using NLP-like scoring
  */
 
-import { 
-  ButtonType, 
-  Signals, 
-  NegativeSignals, 
+import {
+  ButtonType,
+  Signals,
+  NegativeSignals,
   ScoringWeights,
-  DenyPatterns
+  DenyPatterns,
+  NAV_ROLES
 } from './constants.js';
 import { 
   isElementVisible, 
@@ -510,6 +511,136 @@ export class Analyzer {
     return Math.min(100, score);
   }
   
+  /**
+   * Classify the navigation role of an interactive element.
+   * Pure residual logic — no text matching. The SETTINGS_ENTRY role is
+   * the button that scores as neither ACCEPT nor DENY; the CMP structure
+   * guarantees exactly one such button on every banner.
+   * @param {Element} element
+   * @returns {string|null} NAV_ROLES value or null
+   */
+  _classifyNavRole(element) {
+    const role = this._classifyNavRoleInner(element);
+    const text = (element.textContent?.trim() || element.getAttribute('aria-label') || '').slice(0, 60);
+    console.log(`[Guardr][NavRole] <${element.tagName?.toLowerCase()}> "${text}" → ${role ?? 'null'}`);
+    return role;
+  }
+
+  _classifyNavRoleInner(element) {
+    const tag = element.tagName?.toUpperCase();
+    const roleAttr = element.getAttribute('role');
+
+    // ── SECTION_EXPANDER ───────────────────────────────────────────────────
+    // Detected regardless of visibility — CWJobs-style hidden checkboxes with
+    // aria-controls, aria-expanded=false triggers, and <summary> elements.
+    if (tag === 'INPUT' && element.type === 'checkbox' &&
+        element.hasAttribute('aria-controls') && !element.checked) {
+      return NAV_ROLES.SECTION_EXPANDER;
+    }
+    if (element.getAttribute('aria-expanded') === 'false') {
+      return NAV_ROLES.SECTION_EXPANDER;
+    }
+    if (tag === 'SUMMARY') {
+      const details = element.closest('details');
+      if (details && !details.hasAttribute('open')) return NAV_ROLES.SECTION_EXPANDER;
+    }
+
+    // All remaining roles require visibility
+    if (!isElementVisible(element)) return null;
+
+    // ── ACTIVE TOGGLES ─────────────────────────────────────────────────────
+    if (this._isActiveState(element)) {
+      return this._isInLiContext(element)
+        ? NAV_ROLES.LI_TOGGLE_ACTIVE
+        : NAV_ROLES.CONSENT_TOGGLE_ACTIVE;
+    }
+
+    // ── RESIDUAL BUTTON / LINK ─────────────────────────────────────────────
+    const isButton = tag === 'BUTTON' || roleAttr === 'button' ||
+                     (tag === 'INPUT' && (element.type === 'button' || element.type === 'submit'));
+    const isLink   = tag === 'A' || roleAttr === 'link';
+    if (!isButton && !isLink) return null;
+
+    // Score using existing classifier — then apply residual logic
+    const c = this._classifyButton(element);
+
+    // Never act on high-confidence ACCEPT
+    if (c.type === ButtonType.ACCEPT && c.score >= 8) return null;
+    // Skip high-confidence DENY — _executeDenyStrategy handles those before navigator runs
+    if (c.type === ButtonType.DENY && c.score >= 8) return null;
+    // SAVE → SAVE_CONFIRM
+    if (c.type === ButtonType.SAVE && c.score >= 8) return NAV_ROLES.SAVE_CONFIRM;
+
+    // Skip entirely unlabelled icon buttons (no text, no aria-label, score=0)
+    if (c.score === 0 &&
+        !element.textContent?.trim() &&
+        !element.getAttribute('aria-label')) {
+      return null;
+    }
+
+    // Link residual → VENDOR_LIST_LINK (links typically expand vendor/partner panels)
+    if (isLink) return NAV_ROLES.VENDOR_LIST_LINK;
+
+    // Button residual → SETTINGS_ENTRY
+    return NAV_ROLES.SETTINGS_ENTRY;
+  }
+
+  /**
+   * Check if element is in an active (on/checked) state.
+   * Skips disabled elements — mandatory toggles are always disabled.
+   * @param {Element} element
+   * @returns {boolean}
+   * @private
+   */
+  _isActiveState(element) {
+    if (element.disabled || element.getAttribute('aria-disabled') === 'true') return false;
+    const tag = element.tagName?.toUpperCase();
+    if (tag === 'INPUT' && element.type === 'checkbox') return element.checked;
+    if (element.getAttribute('aria-checked') === 'true') return true;
+    if (element.getAttribute('aria-pressed') === 'true') return true;
+    const cls = (element.className || '').toLowerCase();
+    return /\b(active|on|checked|enabled)\b/.test(cls);
+  }
+
+  /**
+   * Determine if a checked checkbox is the LI toggle in a consent/LI pair.
+   *
+   * Core principle: every CMP that separates consent from LI renders them as a
+   * pair in the same container row — consent toggle defaults OFF (unchecked),
+   * LI toggle defaults ON (checked). The checked checkbox in a same-container
+   * pair is always the LI toggle. This is universal across all CMPs.
+   *
+   * Detection: walk up max 4 ancestor levels to find a container that holds
+   * 2+ checkboxes. If at least one sibling checkbox is unchecked, this is the
+   * LI toggle. No id patterns, no class matching, no text matching.
+   *
+   * @param {Element} element — must be input[type=checkbox]:checked
+   * @returns {boolean}
+   * @private
+   */
+  _isInLiContext(element) {
+    if (element.tagName?.toUpperCase() !== 'INPUT' || element.type !== 'checkbox') {
+      return false;
+    }
+    let el = element;
+    for (let i = 0; i < 8; i++) {
+      el = el.parentElement;
+      if (!el) break;
+      const checkboxes = Array.from(el.querySelectorAll('input[type="checkbox"]'));
+      const uncheckedSiblings = checkboxes.filter(cb => cb !== element && !cb.checked);
+      console.log('[Guardr][Navigator] pair check:', element.id,
+        'checked:', element.checked,
+        'level:', i + 1, '(' + (el.tagName || '?') + '#' + (el.id || '') + ')',
+        'siblings:', checkboxes.length,
+        'unchecked siblings:', uncheckedSiblings.length
+      );
+      if (checkboxes.length >= 2) {
+        return uncheckedSiblings.length > 0;
+      }
+    }
+    return false;
+  }
+
   /**
    * Clear cache (useful when banner changes)
    */

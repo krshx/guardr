@@ -197,6 +197,50 @@ export class Learning {
   }
   
   /**
+   * Record a user-initiated correction (teach mode).
+   * Sets initial confidence at 90 and marks the pattern as user-taught.
+   * Existing patterns get a ×3 success boost and a +20 confidence bump.
+   * @param {object} context
+   * @param {string} strategy
+   * @param {object[]} actions
+   */
+  async recordCorrection(context, strategy, actions) {
+    await this.init();
+
+    const fingerprint = this.generateFingerprint(context);
+    const domain = this._extractDomain(window.location.hostname);
+    const existing = this._patterns.get(fingerprint);
+
+    if (existing) {
+      existing.successCount += 3;
+      existing.lastUsed = Date.now();
+      existing.confidence = Math.min(95, this._calculateConfidence(existing) + 20);
+      existing.method = 'user-taught';
+      if (actions?.length) {
+        existing.actions = actions;
+        existing.strategy = strategy;
+      }
+    } else {
+      this._patterns.set(fingerprint, {
+        id: fingerprint,
+        domain,
+        cmp: context.cmp || 'generic',
+        strategy,
+        actions: actions || [],
+        successCount: 3,
+        failCount: 0,
+        created: Date.now(),
+        lastUsed: Date.now(),
+        confidence: 90,
+        method: 'user-taught'
+      });
+    }
+
+    this._debouncedSave();
+    log.info('Recorded user correction:', fingerprint);
+  }
+
+  /**
    * Get statistics about learned patterns
    * @returns {object}
    */

@@ -1,17 +1,19 @@
 {
   "name": "guardr",
-  "version": "3.1.22",
+  "version": "3.3.6",
   "description": "Guardr - Autonomous cookie consent denier with self-learning",
   "scripts": {
-    "build": "node build.js",
-    "build:watch": "node build.js --watch",
-    "build:minor": "node build.js --minor",
-    "build:patch": "node build.js --patch",
+    "build": "esbuild src/index.js --bundle --platform=browser --target=chrome112 --format=iife --minify --outfile=content-v3.js",
+    "watch": "esbuild src/index.js --bundle --platform=browser --target=chrome112 --format=iife --sourcemap --outfile=content-v3.js --watch",
+    "build:ext": "npm run build && mkdir -p dist && cp manifest.json popup.html popup.js dist/ && cp -r icons dist/",
+    "build:minor": "node build.js --minor --version-only && npm run build",
+    "build:patch": "node build.js --patch --version-only && npm run build",
     "test": "node test-automation.js",
     "test:quick": "node test-automation.js --quick",
     "install-deps": "npm install puppeteer --save-dev"
   },
   "devDependencies": {
+    "esbuild": "^0.25.12",
     "puppeteer": "^24.0.0"
   },
   "author": "krshx",

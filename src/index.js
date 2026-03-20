@@ -9,7 +9,7 @@ import { getDetector } from './detector.js';
 import { getAnalyzer } from './analyzer.js';
 import { getActor } from './actor.js';
 import { getLearning } from './learning.js';
-import { isContextValid, safeSendMessage, log, initLogging, setDebugMode } from './utils.js';
+import { isContextValid, safeSendMessage, log, initLogging, setDebugMode, getInteractiveElements } from './utils.js';
 
 /**
  * Main orchestrator - coordinates all modules
@@ -21,11 +21,13 @@ class Orchestrator {
     this._analyzer = getAnalyzer();
     this._actor = getActor();
     this._learning = getLearning();
-    this._result = getResultBuilder();
+    this._result = null; // initialised fresh at the start of each _handleBannerDetected cycle
     this._initialized = false;
     this._autoMode = true;       // default ON; refreshed from storage at init
     this._manualRunActive = false; // true while runAndGetResult is pending
+    this._teachMode = false;     // true during a TEACH_MODE run — records correction on success
     this._processAttempts = 0;   // incremented on each FAILED result; capped at 3 per page
+    this._navVisited = new WeakSet(); // persists across navigator restarts; reset only on state machine reset
   }
   
   /**
@@ -62,9 +64,22 @@ class Orchestrator {
       }
     });
 
+    // Patch history.pushState / replaceState to fire a synthetic navigation event.
+    // Must happen before the detector starts so no SPA navigation is missed.
+    // Most modern SPAs (React Router, Next.js, Vue Router) navigate this way
+    // rather than via popstate, which only fires on back/forward button presses.
+    if (!window.__guardrNavPatched) {
+      window.__guardrNavPatched = true;
+      const _dispatchNav = () => window.dispatchEvent(new Event('guardr:navchange'));
+      const _origPush    = history.pushState.bind(history);
+      const _origReplace = history.replaceState.bind(history);
+      history.pushState    = (...args) => { _origPush(...args);    _dispatchNav(); };
+      history.replaceState = (...args) => { _origReplace(...args); _dispatchNav(); };
+    }
+
     // Setup event listeners
     this._setupEventListeners();
-    
+
     // Start detection
     this._detector.start();
     
@@ -86,10 +101,19 @@ class Orchestrator {
       await this._handleBannerDetected(e.detail);
     });
     
-    // Handle page navigation
-    window.addEventListener('popstate', () => {
-      this._onNavigation();
-    });
+    // Handle SPA navigation — all three sources share one debounced handler.
+    // pushState/replaceState dispatch 'guardr:navchange' (patched above).
+    // Back/forward presses fire popstate. Hash-only routers fire hashchange.
+    // Debounce at 300ms: some frameworks call pushState multiple times per
+    // logical navigation (e.g. React Router v6 double-push on strict mode).
+    let _navTimer = null;
+    const _debouncedNav = () => {
+      clearTimeout(_navTimer);
+      _navTimer = setTimeout(() => this._onNavigation(), 300);
+    };
+    window.addEventListener('popstate',         _debouncedNav);
+    window.addEventListener('guardr:navchange', _debouncedNav);
+    window.addEventListener('hashchange',       _debouncedNav);
     
     // Handle visibility changes (tab switches)
     document.addEventListener('visibilitychange', () => {
@@ -136,8 +160,8 @@ class Orchestrator {
         return;
       }
       
-      // Reset result builder
-      this._result.reset();
+      // Fresh result builder for this banner cycle — actor writes to the same instance
+      this._result = getResultBuilder();
       
       // Transition to DETECTED state
       this._machine.transition(State.DETECTED, { banner, cmp, isPaywall });
@@ -260,7 +284,12 @@ class Orchestrator {
       if (fallbackSuccess) {
         this._machine.transition(State.COMPLETE);
         const actions = this._result.build().actionsPerformed;
-        await this._learning.recordSuccess(context, 'fallback', actions);
+        if (this._teachMode) {
+          this._teachMode = false;
+          await this._learning.recordCorrection(context, 'fallback', actions);
+        } else {
+          await this._learning.recordSuccess(context, 'fallback', actions);
+        }
       } else {
         this._result.addError('Analysis', 'Could not determine action strategy');
         this._machine.transition(State.FAILED, { reason: 'no-strategy' });
@@ -276,7 +305,7 @@ class Orchestrator {
     });
     
     // Execute plan
-    const execResult = await this._actor.execute(plan);
+    const execResult = await this._actor.execute(plan, this._navVisited, false, this._result);
     log.info(`Execution result — success: ${execResult.success}, strategy: ${plan.strategy}, time: ${Math.round(execResult.executionTime || 0)}ms`);
     
     if (execResult.success) {
@@ -284,7 +313,12 @@ class Orchestrator {
       
       // Record successful pattern
       const actions = this._result.build().actionsPerformed;
-      await this._learning.recordSuccess(context, plan.strategy, actions);
+      if (this._teachMode) {
+        this._teachMode = false;
+        await this._learning.recordCorrection(context, plan.strategy, actions);
+      } else {
+        await this._learning.recordSuccess(context, plan.strategy, actions);
+      }
       
     } else {
       // Try fallback strategies if primary failed
@@ -293,7 +327,12 @@ class Orchestrator {
       if (fallbackSuccess) {
         this._machine.transition(State.COMPLETE);
         const actions = this._result.build().actionsPerformed;
-        await this._learning.recordSuccess(context, 'fallback', actions);
+        if (this._teachMode) {
+          this._teachMode = false;
+          await this._learning.recordCorrection(context, 'fallback', actions);
+        } else {
+          await this._learning.recordSuccess(context, 'fallback', actions);
+        }
       } else {
         this._machine.transition(State.FAILED, { reason: 'execution-failed' });
         await this._learning.recordFailure(context);
@@ -309,18 +348,27 @@ class Orchestrator {
     // Re-analyze to get fresh element references
     const plan = this._analyzer.analyze(banner);
     plan.cmp = pattern.cmp;
-    
+
+    // Guard: if the cached strategy is direct-deny but fresh analysis finds no deny
+    // buttons, the pattern is stale (CMP layout changed). Return false immediately so
+    // the caller falls through to a full fresh analysis instead of executing a strategy
+    // that has nothing to click.
+    if (pattern.strategy === 'direct-deny' && !(plan.denyButtons?.length > 0)) {
+      log.warn('Cached direct-deny pattern invalidated — no deny buttons found on fresh analysis');
+      return false;
+    }
+
     // Override strategy with cached one
     const originalStrategy = plan.strategy;
     plan.strategy = pattern.strategy;
     
-    // Execute
-    const result = await this._actor.execute(plan);
-    
+    // Execute — skipNavigator=true: navigator must not run inside pattern replay
+    const result = await this._actor.execute(plan, this._navVisited, true, this._result);
+
     if (!result.success) {
       // Try original strategy
       plan.strategy = originalStrategy;
-      return (await this._actor.execute(plan)).success;
+      return (await this._actor.execute(plan, this._navVisited, true, this._result)).success;
     }
     
     return result.success;
@@ -339,7 +387,8 @@ class Orchestrator {
       plan.strategy = strategy;
       log.debug('Trying fallback strategy:', strategy);
       
-      const result = await this._actor.execute(plan);
+      // skipNavigator=true: navigator must not run inside fallback loops
+      const result = await this._actor.execute(plan, this._navVisited, true, this._result);
       if (result.success) {
         return true;
       }
@@ -396,19 +445,26 @@ class Orchestrator {
     
     // Reset for next detection
     this._machine.reset();
-    this._result.reset();
+    this._result = getResultBuilder();
+    this._navVisited = new WeakSet();
   }
-  
+
   /**
-   * Handle navigation events
+   * Handle SPA navigation (popstate / pushState / replaceState / hashchange).
    * @private
    */
-  _onNavigation() {
-    log.debug('Navigation detected');
+  async _onNavigation() {
+    log.debug('Navigation detected — resetting for new page');
     this._processAttempts = 0;
+    // Reset state machine to IDLE so the new page is treated as a fresh context
     this._machine.reset();
-    this._result.reset();
+    this._result = getResultBuilder();
+    this._navVisited = new WeakSet();
     this._analyzer.clearCache();
+    // Clear loop-break guard so banners on the new page are not blocked
+    this._detector._recentlyActed.clear();
+    // Wait for the SPA to finish rendering the new route before scanning
+    await new Promise(r => setTimeout(r, 500));
     this._detector.rescan();
   }
   
@@ -473,7 +529,8 @@ class Orchestrator {
 
       // Trigger scan (bypasses autoMode because _manualRunActive = true)
       this._machine.reset();
-      this._result.reset();
+      this._result = getResultBuilder();
+      this._navVisited = new WeakSet();
       this._detector.rescan();
     });
   }
@@ -487,7 +544,49 @@ class Orchestrator {
       state: this._machine.state,
       isActive: this._machine.isActive,
       elapsed: this._machine.elapsed,
-      result: this._result.build()
+      result: (this._result || getResultBuilder()).build()
+    };
+  }
+
+  /**
+   * Return a lightweight snapshot for the popup's SCAN_ONLY query.
+   * No state transitions. No side effects.
+   * @returns {object}
+   */
+  getScanState() {
+    const state  = this._machine.state;
+    const result = (this._result || getResultBuilder()).build();
+    const ctx    = this._machine.context;
+
+    const cmp = result.cmpDetected || ctx.cmp || null;
+    const isComplete = state === State.COMPLETE;
+
+    // Count toggles on the detected banner if it is still in the DOM
+    let toggleCount = 0;
+    if (ctx.banner?.isConnected) {
+      toggleCount = ctx.banner.querySelectorAll(
+        'input[type="checkbox"], [role="switch"], [role="checkbox"], button[aria-pressed], button[aria-checked]'
+      ).length;
+    }
+
+    const autoResult = isComplete ? {
+      denied:       result.unchecked.length,
+      kept:         result.mandatory.length,
+      bannerClosed: result.bannerClosed,
+      bannerFound:  result.bannerFound,
+      success:      true,
+      cmp,
+      strategy:     ctx.strategy || result.cmpMethod || null,
+      timestamp:    Date.now()
+    } : null;
+
+    return {
+      detected:    result.bannerFound || (state !== State.IDLE && state !== State.FAILED),
+      cmp,
+      state,
+      toggleCount,
+      autoComplete: isComplete,
+      autoResult
     };
   }
   
@@ -566,9 +665,43 @@ if (typeof window !== 'undefined') {
       setDebugMode(on);
       chrome.storage.local.set({ debugMode: on });
     },
+    classifyAll: () => {
+      const orc = getOrchestrator();
+      const els = getInteractiveElements(document.body, { includeHidden: true });
+      const rows = els.map(el => ({
+        tag:  el.tagName?.toLowerCase(),
+        text: (el.textContent?.trim() || el.getAttribute('aria-label') || '').slice(0, 60),
+        role: orc._analyzer._classifyNavRole(el)
+      }));
+      console.table(rows);
+      return rows;
+    },
+    // classifyAll is also callable from the page console via:
+    // document.dispatchEvent(new CustomEvent('guardr:classify'))
     stop,
     start
   };
+}
+
+// ── Debug helper — callable from the page console (top context) ────────────
+// document is shared between isolated world and page, so dispatching a
+// CustomEvent from the page console triggers the listener in the content script.
+// Usage: document.dispatchEvent(new CustomEvent('guardr:classify'))
+if (typeof document !== 'undefined') {
+  document.addEventListener('guardr:classify', () => {
+    const orc = getOrchestrator();
+    const actor = orc._actor;
+    const banner = actor._findActiveBanner();
+    if (!banner) { console.warn('[Guardr] No active banner found'); return; }
+    console.log('[Guardr] Scoping to:', banner.tagName, banner.id || banner.className.slice(0, 60));
+    const els = getInteractiveElements(banner, { includeHidden: true });
+    const rows = els.map(el => ({
+      tag:  el.tagName?.toLowerCase(),
+      text: (el.textContent?.trim() || el.getAttribute('aria-label') || '').slice(0, 60),
+      role: orc._analyzer._classifyNavRole(el)
+    }));
+    console.table(rows);
+  });
 }
 
 // ── Message listener (popup ↔ content script) ──────────────────────────────
@@ -578,10 +711,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
+  if (message.type === 'SCAN_ONLY') {
+    // Return detector snapshot — no action, no state transition.
+    if (!orchestrator) {
+      sendResponse({ detected: false });
+      return false;
+    }
+    sendResponse(orchestrator.getScanState());
+    return false;
+  }
+
   if (message.type === 'RUN_CLEAN') {
     getOrchestrator().runAndGetResult()
       .then(result => sendResponse(result))
       .catch(err => sendResponse({ success: false, error: err.message, errors: [{ context: 'Runtime', message: err.message }] }));
+    return true; // keep channel open for async response
+  }
+
+  if (message.type === 'TEACH_MODE') {
+    const orc = getOrchestrator();
+    orc._teachMode = true;
+    orc.runAndGetResult(15000)
+      .then(result => sendResponse({ patternRecorded: result.success === true, result }))
+      .catch(err => sendResponse({ patternRecorded: false, error: err.message }));
     return true; // keep channel open for async response
   }
 });

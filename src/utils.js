@@ -381,9 +381,10 @@ export function getElementText(el) {
  * @param {Element} container
  * @returns {Element[]}
  */
-export function getInteractiveElements(container) {
+export function getInteractiveElements(container, options = {}) {
   if (!container) return [];
-  
+  const { includeHidden = false } = options;
+
   const selectors = [
     'button',
     'a[href]',
@@ -396,9 +397,28 @@ export function getInteractiveElements(container) {
     '[tabindex]:not([tabindex="-1"])',
     '[onclick]'
   ];
-  
-  return Array.from(container.querySelectorAll(selectors.join(',')))
-    .filter(el => isElementVisible(el));
+
+  const visible = Array.from(container.querySelectorAll(selectors.join(',')))
+    .filter(el => isElementVisible(el) && !isPageNavLink(el));
+
+  if (!includeHidden) return visible;
+
+  // Extra: section expanders that may be visually hidden but structurally functional.
+  // CWJobs and similar CMPs use hidden input[type=checkbox][aria-controls] to control
+  // accordion sections; aria-expanded=false elements may be off-screen but clickable.
+  const expanders = Array.from(container.querySelectorAll(
+    'input[type="checkbox"][aria-controls], [aria-expanded="false"], details:not([open]) > summary'
+  )).filter(el => !isPageNavLink(el));
+
+  const seen = new Set(visible);
+  for (const el of expanders) {
+    if (!seen.has(el)) {
+      seen.add(el);
+      visible.push(el);
+    }
+  }
+
+  return visible;
 }
 
 /**
@@ -438,6 +458,16 @@ export function isPageNavLink(el) {
   if (!el || el.tagName !== 'A') return false;
   const href = el.getAttribute('href');
   if (!href || href === '#' || href.startsWith('javascript:') || href.startsWith('mailto:')) return false;
+
+  // Policy/legal pages are never action targets on a consent banner.
+  // Check the raw href so same-origin relative links like "/cookie-policy"
+  // are caught before the URL parse.
+  const POLICY_PATHS = [
+    '/privacy', '/policy', '/terms', '/legal',
+    '/cookie', '/consent', '/gdpr', '/data-protection'
+  ];
+  if (POLICY_PATHS.some(p => href.toLowerCase().includes(p))) return true;
+
   try {
     const target = new URL(href, window.location.href);
     // Same origin + same path = in-page anchor or same-page form; not a navigation

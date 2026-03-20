@@ -38,6 +38,34 @@ export const ButtonType = Object.freeze({
   UNKNOWN: 'unknown'
 });
 
+// =============================================================================
+// GENERIC CMP NAVIGATOR — residual-classification roles
+// =============================================================================
+
+// Role names assigned by _classifyNavRole (no text matching — pure residual logic)
+export const NAV_ROLES = Object.freeze({
+  // Active toggles: turned off by navigator (highest priority — act immediately)
+  LI_TOGGLE_ACTIVE:      'li_toggle_active',
+  CONSENT_TOGGLE_ACTIVE: 'consent_toggle_active',
+  // Structural navigation
+  VENDOR_LIST_LINK:      'vendor_list_link',  // <a> residual — expand vendor/partner panels
+  SECTION_EXPANDER:      'section_expander',  // aria-expanded=false / details / hidden checkbox
+  SETTINGS_ENTRY:        'settings_entry',    // residual button — neither accept nor deny
+  SAVE_CONFIRM:          'save_confirm',      // residual save/confirm button
+});
+
+// Sort key for navigator: lower number = acted on first
+export const ROLE_PRIORITY = Object.freeze({
+  li_toggle_active:      0,
+  consent_toggle_active: 1,
+  vendor_list_link:      2,
+  section_expander:      3,
+  settings_entry:        4,
+  save_confirm:          5,
+});
+
+export const NAV_MAX_DEPTH = 8;
+
 // Semantic signals for button classification (multi-language)
 export const Signals = Object.freeze({
   ACCEPT: [
@@ -101,6 +129,8 @@ export const Signals = Object.freeze({
     // variations with intervening words like "essential cookies only")
     'necessary only', 'essential only', 'required only', 'functional only',
     'only necessary', 'only essential', 'only required', 'only functional',
+    'just necessary', 'just essential', 'just required', 'just functional',
+    'necessary just', 'essential just',
     'strictly necessary', 'strictly required', 'strictly essential',
     'strictly necessary only', 'strictly required only',
     'necessary cookies only', 'essential cookies only', 'required cookies only',
@@ -185,6 +215,7 @@ export const Signals = Object.freeze({
     'settings', 'preferences', 'manage', 'customize', 'options', 'configure',
     'cookie settings', 'privacy settings', 'manage preferences', 'more options',
     'manage cookies', 'cookie preferences', 'privacy preferences',
+    'select cookies', 'choose cookies', 'cookie choices',
     'advanced', 'details', 'learn more', 'more info', 'privacy options',
     'detailed settings', 'customise', 'customise cookies',
     // Legitimate Interest sub-tabs (clicked after main settings panel opens)
@@ -204,15 +235,20 @@ export const Signals = Object.freeze({
   ],
   
   SAVE: [
-    // English
+    // English — core
     'save', 'confirm', 'apply', 'save settings', 'save preferences',
     'confirm choices', 'save my choices', 'save selection', 'done',
     'save and exit', 'save & exit', 'save and close', 'save & close',
+    'save changes', 'save all', 'save now', 'save & apply', 'save and apply',
+    // English — accept-selection variants (e.g. "Save & Accept", "Accept Selection")
+    'save & accept', 'accept & save', 'save and accept',
+    'allow selection', 'accept selection', 'allow selected', 'accept selected',
+    // English — continue variants (post-settings)
     'continue', 'continue without accepting',
     // German
     'speichern', 'bestätigen', 'übernehmen', 'auswahl speichern',
     // French
-    'enregistrer', 'confirmer', 'sauvegarder', 'valider',
+    'enregistrer', 'confirmer', 'sauvegarder', 'valider', 'fermer',
     // Spanish
     'guardar', 'confirmar', 'aplicar', 'guardar selección',
     // Italian
@@ -223,6 +259,28 @@ export const Signals = Object.freeze({
     'salvar', 'confirmar', 'aplicar'
   ],
   
+  // Text labels used on the Legitimate Interest tab inside CMP settings panels.
+  // Kept separate from SETTINGS so LI detection stays targetted without
+  // accidentally matching generic "manage" / "preferences" labels.
+  LI_TAB: [
+    // English
+    'legitimate interest', 'legitimate interests',
+    // Common tab label shared by several CMPs (Quantcast, OneTrust)
+    'partners',
+    // German
+    'berechtigtes interesse', 'berechtigte interessen',
+    // French
+    'intérêt légitime', 'intérêts légitimes',
+    // Spanish
+    'interés legítimo', 'intereses legítimos',
+    // Dutch
+    'legitiem belang', 'legitieme belangen',
+    // Italian
+    'interesse legittimo', 'interessi legittimi',
+    // Portuguese
+    'interesse legítimo', 'interesses legítimos',
+  ],
+
   CLOSE: [
     'close', 'dismiss', '×', 'x', '✕', '✖', 'cancel',
     'schließen', 'fermer', 'cerrar', 'chiudi', 'sluiten', 'fechar'
@@ -246,6 +304,10 @@ export const DenyPatterns = Object.freeze([
   //         "only essential", "only necessary required"
   /\b(essential|necessary|required|functional|strictly|basic|minimal|minimum)[\s\w-]*\bonly\b/i,
   /\bonly\b[\s\w-]*\b(essential|necessary|required|functional|basic|minimal|minimum)\b/i,
+
+  // "just X" — "just" as a synonym for "only"
+  // Covers: "just necessary", "just essential cookies", "just required"
+  /\bjust\s+(necessary|essential|required|functional|basic|minimal|minimum)\b/i,
 
   // "strictly X" — covers: "strictly necessary", "strictly required",
   //                "strictly functional", "strictly needed"
@@ -292,7 +354,9 @@ export const CMPSignatures = Object.freeze({
   ONETRUST: {
     name: 'OneTrust',
     selectors: ['#onetrust-consent-sdk', '.onetrust-pc-dark-filter', '[class*="onetrust"]'],
-    globals: ['OneTrust', 'OptanonWrapper']
+    globals: ['OneTrust', 'OptanonWrapper'],
+    // OneTrust opens its Preference Center as a separate DOM element outside the banner
+    settingsPopup: ['[id*="onetrust-pc"]', '[class*="onetrust-pc"]']
   },
   COOKIEBOT: {
     name: 'Cookiebot',
@@ -338,6 +402,37 @@ export const CMPSignatures = Object.freeze({
     name: 'Iubenda',
     selectors: ['#iubenda-cs-banner', '.iubenda-cs-container'],
     globals: ['_iub']
+  },
+  COOKIELAWINFO: {
+    name: 'Cookie Law Info',
+    selectors: ['#cookie-law-info-bar', '[class*="cli-"]'],
+    globals: [],
+    settingsPopup: ['#cliSettingsPopup', '#cookie-law-info-again', '[class*="cli-settings"]']
+  },
+  COOKIEYES: {
+    name: 'CookieYes',
+    selectors: ['.cky-consent-container', '[class*="cky-"]'],
+    globals: ['cookieyes']
+  },
+  AXEPTIO: {
+    name: 'Axeptio',
+    selectors: ['.axeptio-widget', '[id*="axeptio"]'],
+    globals: ['axeptio']
+  },
+  OSANO: {
+    name: 'Osano',
+    selectors: ['.osano-cm-container', '.osano-cm-dialog'],
+    globals: ['Osano']
+  },
+  COOKIECONTROL: {
+    name: 'Cookie Control',
+    // CIVIC UK Cookie Control: the prompt bar (#cookie-control-prompt) is the
+    // initial banner; clicking "Privacy options" opens the full settings panel
+    // (#cookie-control, same element but revealed with --open modifier class).
+    // settingsPopup tells _findSettingsPopup where to look for that panel.
+    selectors: ['#cookie-control-prompt', '[class*="uolcc-"]'],
+    globals: ['CookieControl'],
+    settingsPopup: ['#cookie-control']
   }
 });
 
@@ -388,6 +483,11 @@ export const BannerSelectors = [
   // Steam
   '#cookiePrefPopup',
   '[class*="cookiepreferences_popup"]',
+
+  // CIVIC UK Cookie Control (common on UK education/govt sites)
+  '#cookie-control',
+  '#cookie-control-prompt',
+  '[id*="cookie-control"]',
 
   // Generic class/id patterns (medium confidence)
   '[class*="cookie-banner"]',
@@ -524,6 +624,10 @@ export const Timing = Object.freeze({
   // Detection
   MUTATION_DEBOUNCE: 100,
   INITIAL_SCAN_DELAY: 500,
+  // Late re-scan schedule: covers CMPs that inject banners asynchronously.
+  // 15 s covers slow SPA frameworks (Blazor, Next.js hydration, etc.) that
+  // may take several seconds to bootstrap before injecting consent scripts.
+  RESCAN_DELAYS: [1000, 2000, 4000, 7000, 15000],
   
   // Timeouts
   TOTAL_OPERATION_TIMEOUT: 20000, // must exceed worst-case CMP API wait (≤7s)
@@ -568,5 +672,6 @@ export const MessageType = Object.freeze({
   GET_PATTERNS: 'GUARDR_GET_PATTERNS',
   SAVE_PATTERN: 'GUARDR_SAVE_PATTERN',
   GET_SETTINGS: 'GUARDR_GET_SETTINGS',
-  UPDATE_BADGE: 'GUARDR_UPDATE_BADGE'
+  UPDATE_BADGE: 'GUARDR_UPDATE_BADGE',
+  TEACH_MODE:   'GUARDR_TEACH_MODE'
 });

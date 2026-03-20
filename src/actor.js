@@ -11,18 +11,17 @@
  * - Retry logic and better verification
  */
 
-import { Timing, ButtonType } from './constants.js';
-import { 
+import { Timing, NAV_ROLES, ROLE_PRIORITY, NAV_MAX_DEPTH } from './constants.js';
+import {
   clickElement,
   isPageNavLink,
-  setToggleState, 
+  setToggleState,
   getToggleState,
-  waitForElement,
   waitForRemoval,
-  waitForVisible,
   isElementVisible,
+  getInteractiveElements,
   getToggles,
-  log 
+  log
 } from './utils.js';
 import { getAnalyzer } from './analyzer.js';
 import { getResultBuilder } from './state-machine.js';
@@ -40,8 +39,8 @@ export class Actor {
    * @param {ActionPlan} plan
    * @returns {Promise<ExecutionResult>}
    */
-  async execute(plan) {
-    const result = getResultBuilder();
+  async execute(plan, navVisited = new WeakSet(), skipNavigator = false, result = null) {
+    result = result || getResultBuilder();
     const startTime = performance.now();
     
     if (!plan || !plan.banner) {
@@ -54,8 +53,30 @@ export class Actor {
     try {
       let success = false;
 
+      // Try __tcfapi first — covers all IAB/TCF-compliant CMPs (Quantcast, Didomi, custom)
+      const tcfApiResult = await this._tryTcfApi(plan.banner);
+      if (tcfApiResult) {
+        const { method: tcfMethod, denied: tcfDenied, liDenied: tcfLiDenied = 0 } = tcfApiResult;
+        log.info(`✓ TCF API: ${tcfMethod} (${tcfDenied} consent + ${tcfLiDenied} LI denied)`);
+        result.bannerClosed(tcfMethod);
+        result.addBulkDenied(tcfDenied, 'consent', 'TCF purposes 1-10');
+        result.addBulkDenied(tcfLiDenied, 'legitimate interest', 'TCF LI purposes');
+        success = true;
+      }
+
+      // Try __uspapi (CCPA) — US Privacy string denial
+      if (!success) {
+        const uspResult = await this._tryUspApi();
+        if (uspResult) {
+          log.info(`✓ USP API: ${uspResult.method}`);
+          result.bannerClosed(uspResult.method);
+          result.addBulkDenied(1, 'consent', 'CCPA opt-out');
+          success = true;
+        }
+      }
+
       // For iframe-based CMPs (no DOM buttons accessible), try JS API first
-      if (plan.isIframeCMP || plan.strategy === 'unknown' || plan.strategy === 'fallback') {
+      if (!success && (plan.isIframeCMP || plan.strategy === 'unknown' || plan.strategy === 'fallback')) {
         log.debug('Trying CMP JavaScript API denial...');
         success = await this._executeCMPApiDeny(plan, result);
         if (success) {
@@ -66,8 +87,8 @@ export class Actor {
           };
         }
       }
-      
-      switch (plan.strategy) {
+
+      if (!success) switch (plan.strategy) {
         case 'cmp-api':
           success = await this._executeFallbackStrategy(plan, result);
           break;
@@ -75,31 +96,47 @@ export class Actor {
         case 'direct-deny':
           success = await this._executeDenyStrategy(plan, result);
           break;
-          
+
         case 'toggle-and-save':
           success = await this._executeToggleStrategy(plan, result, true);
           break;
-          
+
         case 'toggle-only':
           success = await this._executeToggleStrategy(plan, result, false);
           break;
-          
+
         case 'open-settings':
           success = await this._executeSettingsStrategy(plan, result);
           break;
-          
+
         case 'close-only':
           success = await this._executeCloseStrategy(plan, result);
           break;
-          
+
         default:
           success = await this._executeFallbackStrategy(plan, result);
       }
-      
-      // Verify banner is closed
+
+      // Verify banner is closed after strategy
       if (success && !await this._verifyBannerClosed(plan.banner)) {
         log.warn('Banner still visible after actions');
         success = false;
+      }
+
+      // Last resort: semantic navigator — goal-directed multi-step CMP traversal.
+      // Only runs when TCF API, USP API, and all direct strategies have failed.
+      // skipNavigator is true for all recursive execute() calls (_tryFallbacks,
+      // _replayPattern) so the navigator fires exactly once, from the top-level call.
+      if (!success && !skipNavigator) {
+        log.debug('[Guardr][Navigator] Starting semantic navigator (last resort)...');
+        success = await this._navigateAndDeny(plan.banner, result, navVisited);
+        if (success) {
+          return {
+            success: true,
+            strategy: 'navigator',
+            executionTime: performance.now() - startTime
+          };
+        }
       }
       
       return {
@@ -180,34 +217,14 @@ export class Actor {
         }
       }
 
-      // PATH 2: TCF API (FIXED: getTCData first)
-      if (typeof window.__tcfapi === 'function') {
-        log.info('TCF API — calling getTCData first');
-        const tcfWorked = await new Promise(resolve => {
-          const timeout = setTimeout(() => resolve(false), 3000);
-          try {
-            // CRITICAL FIX: Must call getTCData BEFORE rejectAll
-            window.__tcfapi('getTCData', 2, (tcData, success) => {
-              if (!success) { clearTimeout(timeout); return resolve(false); }
-              log.debug('TCF data received, now calling rejectAll');
-              window.__tcfapi('rejectAll', 2, (rejectSuccess) => {
-                clearTimeout(timeout);
-                resolve(!!rejectSuccess);
-              });
-            });
-          } catch (e) {
-            clearTimeout(timeout);
-            resolve(false);
-          }
-        });
-
-        if (tcfWorked) {
-          await this._waitForUI(1500);
-          if (!isElementVisible(banner)) {
-            log.info('✓ TCF rejectAll');
-            result.bannerClosed('tcf-api');
-            return true;
-          }
+      // PATH 2: TCF API — delegates to _tryTcfApi() to avoid duplication
+      const spTcfResult = await this._tryTcfApi(banner);
+      if (spTcfResult) {
+        await this._waitForUI(1500);
+        if (!isElementVisible(banner)) {
+          log.info(`✓ TCF API (${spTcfResult.method})`);
+          result.bannerClosed(spTcfResult.method);
+          return true;
         }
       }
 
@@ -297,6 +314,13 @@ export class Actor {
     if (window.OneTrust || window.OptanonWrapper) {
       log.info('OneTrust detected');
 
+      // Helper: get non-essential group count from OneTrust domain data
+      const _otNonEssentialCount = () => {
+        const groups = window.OneTrust?.GetDomainData?.()?.Groups || [];
+        const count = groups.filter(g => g.GroupId !== 'C0001' && g.GroupId !== 'C0').length;
+        return count || 1;
+      };
+
       // Method 1: RejectAll
       if (typeof window.OneTrust?.RejectAll === 'function') {
         try {
@@ -304,6 +328,7 @@ export class Actor {
           await this._waitForUI(1500);
           if (!isElementVisible(banner)) {
             log.info('✓ OneTrust.RejectAll()');
+            result.addBulkDenied(_otNonEssentialCount(), 'consent', 'OneTrust non-essential groups');
             result.bannerClosed('onetrust-rejectAll');
             return true;
           }
@@ -320,6 +345,7 @@ export class Actor {
           await this._waitForUI(1500);
           if (!isElementVisible(banner)) {
             log.info('✓ OneTrust.SetGroups');
+            result.addBulkDenied(_otNonEssentialCount(), 'consent', 'OneTrust non-essential groups');
             result.bannerClosed('onetrust-setGroups');
             return true;
           }
@@ -337,7 +363,7 @@ export class Actor {
             toggled++;
           }
         });
-        
+
         if (toggled > 0) {
           log.info(`OneTrust: toggled off ${toggled} groups`);
           const saveBtn = document.querySelector('.save-preference-btn-handler, #accept-recommended-btn-handler');
@@ -346,6 +372,7 @@ export class Actor {
             await this._waitForUI(1500);
             if (!isElementVisible(banner)) {
               log.info('✓ OneTrust toggles');
+              result.addBulkDenied(toggled, 'consent', 'OneTrust toggled groups');
               result.bannerClosed('onetrust-toggles');
               return true;
             }
@@ -560,14 +587,73 @@ export class Actor {
     const cookieYes = document.querySelector('.cky-consent-container');
     if (cookieYes && isElementVisible(cookieYes)) {
       log.info('CookieYes detected');
-      
-      const cyBtn = document.querySelector('.cky-btn-reject, [data-cky-tag="reject-button"]');
-      if (cyBtn && isElementVisible(cyBtn)) {
-        cyBtn.click();
+
+      // Method 1: JS API — deny all non-essential categories explicitly.
+      // Must call updateConsent BEFORE any confirm click, otherwise CookieYes
+      // records the current toggle state (which may include opted-in categories).
+      if (typeof window.CookieYes?.updateConsent === 'function') {
+        try {
+          window.CookieYes.updateConsent({
+            analytics:     'no',
+            performance:   'no',
+            advertisement: 'no',
+            functional:    'no',
+            necessary:     'yes'
+          });
+          await this._waitForUI(1000);
+          result.addBulkDenied(4, 'consent', 'CookieYes categories');
+          if (!isElementVisible(banner)) {
+            log.info('✓ CookieYes API');
+            result.bannerClosed('cookieyes-api');
+            return true;
+          }
+          // API ran but banner still visible — fall through to confirm click
+          const cyConfirm = document.querySelector(
+            '.cky-btn-accept, [data-cky-tag="accept-button"], .cky-btn-customize-accept'
+          );
+          if (cyConfirm && isElementVisible(cyConfirm)) {
+            cyConfirm.click();
+            await this._waitForUI(1500);
+            if (!isElementVisible(banner)) {
+              log.info('✓ CookieYes API + confirm');
+              result.bannerClosed('cookieyes-api');
+              return true;
+            }
+          }
+        } catch (_) {}
+      }
+
+      // Method 2: DOM toggle sweep — turn off all non-necessary toggles first,
+      // then click Confirm. Never click Confirm before toggles are off.
+      const cyToggles = Array.from(cookieYes.querySelectorAll(
+        'input[type="checkbox"][data-cky-tag], .cky-switch input[type="checkbox"]'
+      )).filter(t => {
+        const tag = t.getAttribute('data-cky-tag') || '';
+        return tag !== 'necessary-cookies' && t.checked;
+      });
+
+      let toggledOff = 0;
+      for (const t of cyToggles) {
+        t.click();
+        toggledOff++;
+        await this._waitForUI(100);
+      }
+
+      if (toggledOff > 0) {
+        log.info(`CookieYes: turned off ${toggledOff} non-essential toggles`);
+        result.addBulkDenied(toggledOff, 'consent', 'CookieYes categories');
+      }
+
+      // Now it is safe to confirm
+      const cyConfirm = document.querySelector(
+        '.cky-btn-accept, [data-cky-tag="accept-button"], .cky-btn-customize-accept, .cky-btn-reject, [data-cky-tag="reject-button"]'
+      );
+      if (cyConfirm && isElementVisible(cyConfirm)) {
+        cyConfirm.click();
         await this._waitForUI(1500);
         if (!isElementVisible(banner)) {
-          log.info('✓ CookieYes button');
-          result.bannerClosed('cookieyes-button');
+          log.info('✓ CookieYes DOM toggles');
+          result.bannerClosed('cookieyes-dom');
           return true;
         }
       }
@@ -665,6 +751,93 @@ export class Actor {
   }
 
   /**
+   * Attempt consent denial via the IAB TCF 2.0 __tcfapi interface.
+   * Works on any TCF-compliant CMP (Quantcast, Didomi, custom, and others).
+   * @param {Element} banner - the detected banner element (used for event fallback)
+   * @returns {Promise<{success:true, method:string, denied:number}|null>}
+   * @private
+   */
+  async _tryTcfApi(banner) {
+    if (typeof window.__tcfapi !== 'function') return null;
+
+    // Step 1: getTCData — enumerates the vendor list so we can deny each one
+    const tcData = await new Promise(resolve => {
+      const t = setTimeout(() => resolve(null), 3000);
+      try {
+        window.__tcfapi('getTCData', 2, (data, ok) => {
+          clearTimeout(t);
+          resolve(ok && data ? data : null);
+        });
+      } catch (_) { clearTimeout(t); resolve(null); }
+    });
+
+    if (!tcData) return null;
+
+    // Step 2: Build an all-false denial object from the TC data
+    const purposeIds  = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    const specialIds  = [1, 2];
+    const falseMap    = ids => Object.fromEntries(ids.map(id => [id, false]));
+    const vendorIds   = [...new Set([
+      ...Object.keys(tcData.vendorConsents            || {}).map(Number),
+      ...Object.keys(tcData.vendorLegitimateInterests || {}).map(Number)
+    ])];
+
+    const denialObject = {
+      purposeConsents:              falseMap(purposeIds),
+      legitimateInterestsConsent:   falseMap(purposeIds),
+      specialFeatureOptins:         falseMap(specialIds),
+      vendorConsents:               falseMap(vendorIds),
+      vendorLegitimateInterests:    falseMap(vendorIds)
+    };
+
+    // Step 3: Try setConsent (non-standard but widely implemented)
+    const setConsentOk = await new Promise(resolve => {
+      const t = setTimeout(() => resolve(false), 3000);
+      try {
+        window.__tcfapi('setConsent', 2, (ok) => {
+          clearTimeout(t);
+          resolve(!!ok);
+        }, denialObject);
+      } catch (_) { clearTimeout(t); resolve(false); }
+    });
+
+    if (setConsentOk) return { success: true, method: 'tcfapi-setConsent', denied: purposeIds.length, liDenied: purposeIds.length };
+
+    // Step 4: Fire reject_all event on the CMP element as final fallback
+    const cmpEl = (banner?.isConnected ? banner : null) ||
+      document.querySelector('[id*="cmp"], [class*="cmp"], [id*="consent"], [class*="consent"]');
+    if (cmpEl) {
+      try {
+        cmpEl.dispatchEvent(new CustomEvent('reject_all', { bubbles: true }));
+        return { success: true, method: 'tcfapi-event', denied: purposeIds.length, liDenied: purposeIds.length };
+      } catch (_) {}
+    }
+
+    return null;
+  }
+
+  /**
+   * Attempt CCPA opt-out via the IAB US Privacy (__uspapi) interface.
+   * Sets the US Privacy string to '1YYY': version 1, opted out of sale,
+   * no minor, LSPA not applicable.
+   * @returns {Promise<{success:true, method:'uspapi'}|null>}
+   * @private
+   */
+  async _tryUspApi() {
+    if (typeof window.__uspapi !== 'function') return null;
+
+    return new Promise(resolve => {
+      const t = setTimeout(() => resolve(null), 3000);
+      try {
+        window.__uspapi('setUSPData', 1, (ok) => {
+          clearTimeout(t);
+          resolve(ok ? { success: true, method: 'uspapi' } : null);
+        }, { uspString: '1YYY' });
+      } catch (_) { clearTimeout(t); resolve(null); }
+    });
+  }
+
+  /**
    * Execute direct deny strategy
    * @private
    */
@@ -683,6 +856,7 @@ export class Actor {
       const clicked = clickElement(btn.element);
       
       if (clicked) {
+        result.addBulkDenied(1, 'consent', 'reject button');
         result.recordAction('click-deny', { score: btn.score });
         result.bannerClosed('deny-button');
         
@@ -724,7 +898,8 @@ export class Actor {
       log.debug('No toggles changed');
       return false;
     }
-    
+
+    result.addBulkDenied(count, 'consent', 'non-essential toggles');
     log.info(`Toggled off ${count} cookies`);
     
     if (shouldSave) {
@@ -773,8 +948,12 @@ export class Actor {
         result.recordAction('click-settings', { score: btn.score });
         await this._waitForUI(Timing.SETTINGS_EXPAND_TIME);
 
-        // Re-analyze after panel expanded
-        let newPlan = this._analyzer.analyze(plan.banner);
+        // Re-resolve active panel — settings click may have opened a <dialog> or
+        // a sibling container. Use that as the analysis scope, not the original banner.
+        this._analyzer.clearCache();
+        const activePanel = this._findActiveBanner() || plan.banner;
+        log.debug(`[Guardr][Settings] active panel → <${activePanel.tagName?.toLowerCase()} id="${activePanel.id}">`);
+        let newPlan = this._analyzer.analyze(activePanel);
 
         // --- Legitimate Interest sub-tab handling ---
         // After opening the main settings panel, look for LI sub-tabs
@@ -790,7 +969,32 @@ export class Actor {
         // --- End LI handling ---
 
         if (newPlan.toggles.length > 0) {
-          return await this._executeToggleStrategy(newPlan, result, true);
+          // Initial sweep — defer save until after recursive expansion
+          const analyses = newPlan.toggles.map(t => ({
+            isMandatory: t.isMandatory, label: t.label, category: t.category
+          }));
+          await this._toggleAllOff(newPlan.toggles.map(t => t.element), result, analyses);
+
+          // Recursive expansion — opens nested accordions, vendor lists, LI sections, etc.
+          await this._expandAndSweep(plan.banner, result, 0);
+
+          // Save after all depths have been swept
+          await this._waitForUI(Timing.TOGGLE_SETTLE_TIME * 2);
+          const saved = await this._clickSaveButton(newPlan, result);
+          if (saved) {
+            const closed = await waitForRemoval(plan.banner, Timing.SINGLE_ACTION_TIMEOUT);
+            if (closed) {
+              log.info('✓ Banner closed after recursive sweep + save');
+              result.bannerClosed('toggle-save');
+              return true;
+            }
+          }
+          await this._waitForUI(Timing.CLICK_SETTLE_TIME);
+          if (!isElementVisible(plan.banner)) {
+            log.info('✓ Banner auto-closed after recursive sweep');
+            result.bannerClosed('toggle-auto');
+            return true;
+          }
         }
 
         if (newPlan.denyButtons.length > 0) {
@@ -906,6 +1110,108 @@ export class Actor {
     return true;
   }
   
+  /**
+   * Recursively expand collapsed sections within a container and sweep their toggles.
+   * Handles nested vendor lists, accordion panels, and tabs (e.g. Quantcast Partners,
+   * OneTrust vendor list, CWJobs third-party providers).
+   *
+   * @param {Element}  container - root element to search within
+   * @param {object}   result    - ResultBuilder instance for recording actions
+   * @param {number}   depth     - current recursion depth (default 0)
+   * @returns {Promise<number>}  total toggles acted on across all depths
+   * @private
+   */
+  async _expandAndSweep(container, result, depth = 0) {
+    if (depth >= 4) {
+      log.warn(`[Guardr] _expandAndSweep: depth limit reached (${depth}), stopping`);
+      return 0;
+    }
+
+    let totalToggled = 0;
+    const candidates = new Map(); // trigger Element → section Element
+
+    // 1. aria-expanded="false" triggers
+    for (const el of container.querySelectorAll('[aria-expanded="false"]')) {
+      if (!isElementVisible(el) || candidates.has(el)) continue;
+      const controlledId = el.getAttribute('aria-controls');
+      const section = controlledId
+        ? document.getElementById(controlledId)
+        : el.nextElementSibling || el.parentElement?.nextElementSibling;
+      candidates.set(el, section || el.parentElement);
+    }
+
+    // 2. <details> without [open]
+    for (const details of container.querySelectorAll('details:not([open])')) {
+      const summary = details.querySelector(':scope > summary');
+      if (!summary || !isElementVisible(summary) || candidates.has(summary)) continue;
+      candidates.set(summary, details);
+    }
+
+    // 3. [hidden] sections — look for a preceding sibling trigger
+    for (const hidden of container.querySelectorAll('[hidden]')) {
+      const prev = hidden.previousElementSibling;
+      const trigger = prev?.matches('button, [role="button"]') ? prev
+        : prev?.querySelector('button, [role="button"]');
+      if (trigger && isElementVisible(trigger) && !candidates.has(trigger)) {
+        candidates.set(trigger, hidden);
+      }
+    }
+
+    // 4. Class-name patterns for collapsed/accordion sections
+    const CLASS_RX = /\b(collapsed|closed|expand|accordion|show-more|vendor|partners|third-party)\b/i;
+    for (const section of container.querySelectorAll('[class]')) {
+      if (!CLASS_RX.test(section.className)) continue;
+      const trigger = section.querySelector('button, [role="button"], summary');
+      if (trigger && isElementVisible(trigger) && !candidates.has(trigger)) {
+        candidates.set(trigger, section);
+      }
+    }
+
+    for (const [trigger, section] of candidates) {
+      const label = (
+        trigger.getAttribute('aria-label') ||
+        trigger.textContent?.trim().slice(0, 50) ||
+        trigger.tagName
+      ).replace(/\s+/g, ' ');
+
+      clickElement(trigger);
+      await this._waitForSettlement(section, 800);
+      this._analyzer.clearCache();
+
+      // Sweep the newly revealed toggles
+      const newToggles = getToggles(section);
+      const toggled = await this._toggleAllOff(newToggles, result, null);
+
+      log.info(`[Guardr] Expanded section: "${label}" at depth ${depth}, found ${toggled} new toggles`);
+      totalToggled += toggled;
+
+      // Recurse into the expanded section
+      totalToggled += await this._expandAndSweep(section, result, depth + 1);
+    }
+
+    return totalToggled;
+  }
+
+  /**
+   * Poll until an element's descendant count stabilises or maxMs elapses.
+   * Used after clicking an expand trigger to wait for DOM settlement.
+   * @param {Element} el
+   * @param {number}  maxMs
+   * @private
+   */
+  async _waitForSettlement(el, maxMs = 800) {
+    if (!el) return this._waitForUI(maxMs);
+    const POLL = 50;
+    const steps = Math.floor(maxMs / POLL);
+    let prev = el.querySelectorAll('*').length;
+    for (let i = 0; i < steps; i++) {
+      await new Promise(r => setTimeout(r, POLL));
+      const curr = el.querySelectorAll('*').length;
+      if (curr === prev) return; // stabilised
+      prev = curr;
+    }
+  }
+
   /**
    * Execute close strategy
    * @private
@@ -1116,6 +1422,310 @@ export class Actor {
     return removed;
   }
   
+  /**
+   * Generic residual-classification CMP navigator.
+   * On each iteration: collects interactive elements from the full document body
+   * (including hidden section expanders), classifies each by residual logic, sorts
+   * by ROLE_PRIORITY, then acts on the top candidate. Repeats until SAVE_CONFIRM
+   * is the best remaining option, or NAV_MAX_DEPTH is reached.
+   *
+   * @param {Element} banner  - originally detected banner element
+   * @param {object}  result  - ResultBuilder instance
+   * @returns {Promise<boolean>} true if banner closed
+   * @private
+   */
+  async _navigateAndDeny(banner, result, visited) {
+    let saveButton = null;
+    let phase = 'ENTRY'; // ENTRY → TOGGLE → SAVE
+    // Mutable — updated after each click+settlement so the scope always points
+    // at the currently visible panel, not the original banner container.
+    let activeBanner = this._findActiveBanner() || banner;
+
+    // Phase gates. TOGGLE only processes checkboxes — SAVE_CONFIRM is ineligible
+    // until we explicitly advance to SAVE after all toggles are exhausted.
+    const PHASE_ELIGIBLE = {
+      ENTRY:  [NAV_ROLES.SETTINGS_ENTRY, NAV_ROLES.SECTION_EXPANDER],
+      TOGGLE: [NAV_ROLES.LI_TOGGLE_ACTIVE, NAV_ROLES.CONSENT_TOGGLE_ACTIVE],
+      SAVE:   [NAV_ROLES.SAVE_CONFIRM],
+    };
+
+    for (let depth = 0; depth < NAV_MAX_DEPTH; depth++) {
+      // Phase is checked at the TOP of every iteration — before any element collection.
+      // Auto-advance uses `continue` so the new phase is active from the start of the
+      // next iteration (sibling scan, element collection, etc. all run with correct phase).
+      console.log('[Guardr][Navigator] loop start depth=', depth, 'phase=', phase);
+
+      if (!activeBanner) break;
+
+      let elements = [];
+
+      // allConsentContainers is computed once per iteration and shared across phases.
+      // TOGGLE uses it for checkbox collection; SAVE uses it for button collection.
+      const allConsentContainers = Array.from(document.querySelectorAll(
+        '[id*=consent],[id*=cookie],[id*=vendor],[id*=privacy],[role="dialog"],section[id],#onetrust-pc-sdk,[id*=pc-sdk],dialog:not([hidden])'
+      )).filter(c => c.offsetHeight > 100 && c.offsetWidth > 100);
+
+      if (phase === 'TOGGLE') {
+        // Sibling container scan runs FIRST — before getInteractiveElements —
+        // so all consent/LI checkboxes across parallel DOM sections are in the pool.
+        const allInputs = [];
+        allConsentContainers.forEach(c => {
+          console.log('[Guardr][Navigator] container:', c.tagName, c.id, (c.className || '').slice(0, 30));
+          allInputs.push(...Array.from(c.querySelectorAll('input[type="checkbox"]')));
+        });
+
+        const liCandidates = allInputs.filter(el => el.checked);
+        console.log('[Guardr][Navigator] sibling scan — containers found:',
+          allConsentContainers.length,
+          'checked inputs:', allInputs.length,
+          'LI candidates:', liCandidates.length
+        );
+
+        // All toggles already off — consent was never given or already denied.
+        // Skip the uncheck sweep and go straight to SAVE.
+        if (allInputs.length > 0 && liCandidates.length === 0) {
+          log.debug('[Guardr][Navigator] all toggles already off — advancing to SAVE');
+          phase = 'SAVE';
+          continue;
+        }
+
+        // Pair detection debug — for each checked input, walk up to find the nearest
+        // ancestor containing 2+ checkboxes and log what the classifier will see.
+        allInputs.filter(el => el.checked).forEach(el => {
+          let node = el;
+          let pairParent = null;
+          for (let i = 0; i < 8; i++) {
+            node = node.parentElement;
+            if (!node) break;
+            const cbs = node.querySelectorAll('input[type="checkbox"]');
+            if (cbs.length >= 2) { pairParent = node; break; }
+          }
+          const siblings = pairParent ? Array.from(pairParent.querySelectorAll('input[type="checkbox"]')) : [];
+          const uncheckedSiblings = siblings.filter(s => s !== el && !s.checked);
+          console.log('[Guardr][PairDebug]', el.id,
+            'checked:', el.checked,
+            'parent tag/id:', pairParent?.tagName, pairParent?.id,
+            'total siblings:', siblings.length,
+            'unchecked siblings:', uncheckedSiblings.length
+          );
+        });
+
+        // Seed element pool with sibling scan results, then supplement from activeBanner
+        const seen = new Set(allInputs);
+        elements = allInputs.filter(el => !visited.has(el));
+
+        for (const el of getInteractiveElements(activeBanner, { includeHidden: true })) {
+          if (!visited.has(el) && !seen.has(el)) {
+            seen.add(el);
+            elements.push(el);
+          }
+        }
+
+      } else if (phase === 'SAVE') {
+        // SAVE phase: collect buttons from ALL consent containers, not just activeBanner.
+        // Preference centers (e.g. onetrust-pc-sdk) often render the Save button in a
+        // sibling container that is outside the originally detected activeBanner.
+        const saveElements = [];
+        allConsentContainers.forEach(c => {
+          saveElements.push(...Array.from(c.querySelectorAll('button,[role="button"]')));
+        });
+        saveElements.push(...Array.from(activeBanner.querySelectorAll('button,[role="button"]')));
+        elements = [...new Set(saveElements)].filter(el => !visited.has(el));
+
+      } else {
+        elements = getInteractiveElements(activeBanner, { includeHidden: true })
+          .filter(el => !visited.has(el));
+      }
+
+      const classified = elements
+        .map(el => ({ el, role: this._analyzer._classifyNavRole(el) }))
+        .filter(c => c.role !== null);
+
+      if (classified.length === 0) break;
+
+      // Guard: SETTINGS_ENTRY is the sole residual after ACCEPT and REJECT are claimed.
+      // If two or more buttons are residual, classification upstream is ambiguous — drop
+      // all SETTINGS_ENTRY candidates rather than act on the wrong one.
+      const settingsCount = classified.filter(c => c.role === NAV_ROLES.SETTINGS_ENTRY).length;
+      const safeClassified = settingsCount > 1
+        ? classified.filter(c => c.role !== NAV_ROLES.SETTINGS_ENTRY)
+        : classified;
+
+      // Phase-gated filter — roles outside the current phase are invisible to the picker
+      const phaseFiltered = safeClassified.filter(c => PHASE_ELIGIBLE[phase]?.includes(c.role));
+
+      // Auto-advance: use `continue` so the next iteration starts with the correct phase
+      // at the top — sibling scan (TOGGLE) and element collection all re-run fresh.
+      if (phaseFiltered.length === 0) {
+        if (phase === 'ENTRY') {
+          phase = 'TOGGLE';
+          log.debug('[Guardr][Navigator] auto-advance ENTRY → TOGGLE (no settings entry found)');
+          continue;
+        } else if (phase === 'TOGGLE') {
+          phase = 'SAVE';
+          log.debug('[Guardr][Navigator] auto-advance TOGGLE → SAVE (no toggles remain)');
+          continue;
+        }
+        break;
+      }
+
+      // Highest-priority role first (lowest ROLE_PRIORITY number)
+      phaseFiltered.sort((a, b) => ROLE_PRIORITY[a.role] - ROLE_PRIORITY[b.role]);
+      const target = phaseFiltered[0];
+
+      log.info(`[Guardr][Navigator] depth=${depth} phase=${phase} role=${target.role}`,
+        target.el.tagName, (target.el.innerText || target.el.getAttribute('aria-label') || '').trim().slice(0, 40));
+
+      // SAVE_CONFIRM: only reachable when phase === SAVE (gate enforced above)
+      if (target.role === NAV_ROLES.SAVE_CONFIRM) {
+        saveButton = target.el;
+        break;
+      }
+
+      // Mark visited before acting — prevents thrash if same element re-ranks top next iteration
+      visited.add(target.el);
+
+      if (target.role === NAV_ROLES.LI_TOGGLE_ACTIVE ||
+          target.role === NAV_ROLES.CONSENT_TOGGLE_ACTIVE) {
+        // Uncheck the toggle — use getClickTarget in case the handler is on an inner element.
+        // After each click verify the checkbox is actually unchecked; fall back to label if not.
+        const type = target.role === NAV_ROLES.LI_TOGGLE_ACTIVE
+          ? 'Legitimate Interest' : 'Consent';
+        const label = (target.el.getAttribute('aria-label') || target.el.textContent || 'Toggle').trim().slice(0, 60);
+
+        clickElement(this._getClickTarget(target.el));
+        await new Promise(r => setTimeout(r, 150));
+
+        const unchecked = () => !target.el.checked &&
+          target.el.getAttribute('aria-checked') !== 'true';
+
+        if (!unchecked()) {
+          // Fallback: click the associated <label> element
+          const lbl = target.el.id
+            ? document.querySelector(`label[for="${target.el.id}"]`)
+            : target.el.closest('label');
+          if (lbl) {
+            clickElement(lbl);
+            await new Promise(r => setTimeout(r, 150));
+          }
+        }
+
+        if (unchecked()) {
+          result.addBulkDenied(1, 'legitimate interest', 'vendor LI toggle');
+          result.recordAction('navigator-toggle', { role: target.role, depth, phase });
+          log.debug(`[Guardr][Navigator] ✓ unchecked ${type} toggle: "${label}"`);
+        } else {
+          log.warn(`[Guardr][Navigator] ✗ could not uncheck toggle: "${label}"`);
+        }
+
+      } else {
+        clickElement(this._getClickTarget(target.el));
+        result.recordAction('navigator-' + target.role, { depth, phase });
+
+        // SETTINGS_ENTRY/SECTION_EXPANDER click advances from ENTRY to TOGGLE
+        if (phase === 'ENTRY' &&
+            (target.role === NAV_ROLES.SETTINGS_ENTRY ||
+             target.role === NAV_ROLES.SECTION_EXPANDER)) {
+          phase = 'TOGGLE';
+        }
+      }
+
+      this._analyzer.clearCache();
+      // Settings panel transitions can be slow — give them extra time to render
+      const settlementMs = target.role === NAV_ROLES.SETTINGS_ENTRY ? 1500 : 800;
+      await this._waitForSettlement(activeBanner, settlementMs);
+
+      // Second clearCache — content inside the same container may have been swapped
+      this._analyzer.clearCache();
+
+      // Re-resolve after settlement — settings panel likely rendered in a new container
+      activeBanner = this._findActiveBanner() || activeBanner;
+      log.debug(`[Guardr][Navigator] activeBanner → <${activeBanner.tagName?.toLowerCase()} id="${activeBanner.id}">`);
+
+      // Raw DOM dump — bypasses getInteractiveElements to show exactly what is in the DOM
+      const rawEls = Array.from(activeBanner.querySelectorAll('button, a, input, [role="button"], [role="checkbox"], [tabindex]'));
+      log.debug(`[Guardr][Navigator] raw DOM elements (${rawEls.length}):`,
+        rawEls.map(e => `<${e.tagName.toLowerCase()}> "${(e.textContent?.trim() || e.getAttribute('aria-label') || '').slice(0, 40)}"`).join(' | '));
+    }
+
+    // Click save/confirm if found
+    if (saveButton) {
+      const saveTarget = this._getClickTarget(saveButton);
+      log.info('[Guardr][Navigator] Clicking SAVE_CONFIRM →',
+        `<${saveTarget.tagName?.toLowerCase()} id="${saveTarget.id}">`);
+      clickElement(saveTarget);
+      result.recordAction('navigator-save', { phase });
+      await this._waitForSettlement(activeBanner, 1500);
+    }
+
+    const bannerGone = !banner?.isConnected || !isElementVisible(banner);
+    if (bannerGone) {
+      result.bannerClosed('navigator');
+      log.info('[Guardr][Navigator] ✓ Banner closed');
+    } else {
+      log.warn('[Guardr][Navigator] ✗ Banner still visible after SAVE_CONFIRM');
+    }
+    return bannerGone;
+  }
+
+  /**
+   * Resolve the actual click target for an element.
+   * Some CMPs wrap a <button> shell around an inner <div> or <span> that holds the
+   * real event handler (e.g. data-atx-onclick-payload, onclick, or a named id).
+   * Clicking the outer wrapper dispatches an event that bubbles UP — it never reaches
+   * the inner handler. This function finds the deepest child that owns the handler.
+   * @param {Element} el
+   * @returns {Element}
+   * @private
+   */
+  _getClickTarget(el) {
+    const child = el.querySelector('[data-atx-onclick-payload], [onclick], [data-action], [data-click]');
+    if (child) {
+      log.debug(`[Guardr][Navigator] click target remapped: <${el.tagName.toLowerCase()}> → <${child.tagName.toLowerCase()} id="${child.id}">`);
+      return child;
+    }
+    return el;
+  }
+
+  /**
+   * Find the largest visible consent/cookie banner element in the current DOM.
+   * Scores candidates by area × interactive-child-count to avoid matching tiny
+   * cookie icons or badge elements that share class names.
+   * @returns {Element|null}
+   * @private
+   */
+  _findActiveBanner() {
+    // Priority order:
+    //   1. Visible <dialog> elements (native dialog API — preference panels often use these)
+    //   2. Visible [role="dialog"] elements
+    //   3. Largest visible element matching consent container class/id patterns
+    //   4. Returns null → caller falls back to original banner
+    //
+    // <dialog> and role=dialog receive a score boost so they win over a generic
+    // consent container that may be larger but is the original dismissible banner.
+    const candidates = Array.from(document.querySelectorAll(
+      'dialog:not([hidden]),[role="dialog"],[class*=consent],[class*=cookie],[id*=consent],[id*=cookie]'
+    ));
+
+    let best = null;
+    let bestScore = 0;
+
+    for (const el of candidates) {
+      if (!isElementVisible(el)) continue;
+      const rect = el.getBoundingClientRect();
+      const area = rect.width * rect.height;
+      if (area < 2500) continue; // exclude tiny icons / badges
+      const interactive = el.querySelectorAll('button, a[href], [role="button"], input').length;
+      if (interactive === 0) continue;
+      // Boost <dialog> and role=dialog — these are the preference panel, not the original banner
+      const dialogBoost = (el.tagName === 'DIALOG' || el.getAttribute('role') === 'dialog') ? 50000 : 0;
+      const score = area + interactive * 5000 + dialogBoost;
+      if (score > bestScore) { bestScore = score; best = el; }
+    }
+
+    return best;
+  }
+
   /**
    * Promise-based wait
    * @private
