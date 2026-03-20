@@ -1,6 +1,6 @@
 {
   "name": "guardr",
-  "version": "3.3.6",
+  "version": "3.3.7",
   "description": "Guardr - Autonomous cookie consent denier with self-learning",
   "scripts": {
     "build": "esbuild src/index.js --bundle --platform=browser --target=chrome112 --format=iife --minify --outfile=content-v3.js",

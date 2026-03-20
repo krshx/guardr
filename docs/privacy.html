@@ -16,7 +16,7 @@
       font-size: 15px; line-height: 1.7;
       max-width: 760px; margin: 0 auto; padding: 40px 24px;
     }
-    h1 { font-size: 2rem; color: var(--accent); margin-bottom: 6px; }
+    h1 { font-size: 2rem; color: var(--accent); margin-bottom: 6px; display: flex; align-items: center; gap: 12px; }
     .subtitle { color: var(--dim); margin-bottom: 40px; font-size: 0.9rem; }
     h2 {
       font-size: 1.1rem; color: var(--text); margin: 32px 0 10px;
@@ -51,8 +51,8 @@
 </head>
 <body>
 
-  <h1>�️ Guardr</h1>
-  <p class="subtitle">Privacy Policy &nbsp;·&nbsp; Last updated: February 2026</p>
+  <h1><img src="icons/icon-48.png" width="32" height="32" alt="Guardr icon"> Guardr</h1>
+  <p class="subtitle">Privacy Policy &nbsp;·&nbsp; Last updated: March 2026</p>
 
   <div class="highlight">
     <p>TL;DR — Guardr does not collect, store, or transmit any personal data whatsoever. It runs entirely inside your browser.</p>
@@ -76,15 +76,14 @@
     <li>A randomly generated session token — not tied to you, your device, or your account in any way, and regenerated each session</li>
     <li>The type of consent management platform detected (e.g. "OneTrust" or "Cookiebot") — never the domain or URL of the site</li>
     <li>The count of consents denied (e.g. "12")</li>
-    <li>The extension version number (e.g. "1.0.0")</li>
+    <li>The extension version number (e.g. "3.3.7")</li>
   </ul>
-  <p>This data contains <strong>no personally identifiable information</strong>. It is used solely to improve the extension by understanding which consent platforms are most commonly encountered. You can disable telemetry at any time via the <strong>⚙ settings</strong> icon in the extension popup. Telemetry is <strong>off by default</strong> and must be actively switched on.</p>
+  <p>This data contains <strong>no personally identifiable information</strong>. It is used solely to improve the extension by understanding which consent platforms are most commonly encountered. Telemetry is processed by a self-hosted Supabase backend. You can disable telemetry at any time via the <strong>⚙ settings</strong> icon in the extension popup. Telemetry is <strong>off by default</strong> and must be actively switched on.</p>
 
   <h2>4. Permissions Explained</h2>
   <p>Guardr requests the following Chrome permissions, and uses each only for the purpose stated:</p>
   <ul>
     <li><strong>activeTab</strong> — to read and interact with the currently active tab when you click the extension button</li>
-    <li><strong>scripting</strong> — to inject the consent-denial script into the active page</li>
     <li><strong>storage</strong> — to save your preferences (auto-deny mode, telemetry opt-in, donation reminder dismissed) locally on your device only</li>
     <li><strong>tabs</strong> — to read the current page URL for display inside the extension popup only; this is never transmitted anywhere</li>
     <li><strong>&lt;all_urls&gt;</strong> — required because cookie banners appear on all websites. Without this permission the extension cannot function. No data from any site is collected or transmitted as a result of this permission.</li>
@@ -105,11 +104,11 @@
   <h2>9. Contact</h2>
   <p>Questions about this privacy policy? Open an issue at
     <a href="https://github.com/krshx/guardr" target="_blank">github.com/krshx/guardr</a>
-    or email <a href="mailto:dev+guardr@gmail.com">dev+guardr@gmail.com</a>.
+    or email <a href="mailto:dev@axiworx.com">dev@axiworx.com</a>.
   </p>
 
   <footer>
-    <p>Guardr v2.1.4 &nbsp;·&nbsp; Open source &nbsp;·&nbsp; Built for people, not platforms</p>
+    <p>Guardr v3.3.7 &nbsp;·&nbsp; Open source &nbsp;·&nbsp; Built for people, not platforms</p>
   </footer>
 
 </body>
