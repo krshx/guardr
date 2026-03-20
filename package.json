@@ -1,9 +1,9 @@
 {
   "name": "guardr",
-  "version": "3.3.7",
+  "version": "3.3.10",
   "description": "Guardr - Autonomous cookie consent denier with self-learning",
   "scripts": {
-    "build": "esbuild src/index.js --bundle --platform=browser --target=chrome112 --format=iife --minify --outfile=content-v3.js",
+    "build": "esbuild src/index.js --bundle --platform=browser --target=chrome112 --format=iife --minify --outfile=content-v3.js && node -e \"const v=require('./.version.json').version,fs=require('fs');let h=fs.readFileSync('docs/privacy.html','utf8');h=h.replace(/Guardr v[\\d.]+/,'Guardr v'+v);fs.writeFileSync('docs/privacy.html',h);\"",
     "watch": "esbuild src/index.js --bundle --platform=browser --target=chrome112 --format=iife --sourcemap --outfile=content-v3.js --watch",
     "build:ext": "npm run build && mkdir -p dist && cp manifest.json popup.html popup.js dist/ && cp -r icons dist/",
     "build:minor": "node build.js --minor --version-only && npm run build",

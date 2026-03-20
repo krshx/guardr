@@ -160,7 +160,7 @@ async function saveToHistory(result) {
     const entry = {
       id: Date.now().toString(36) + Math.random().toString(36).substr(2, 5),
       timestamp: Date.now(),
-      url: result.url,
+      url: (() => { try { return new URL(result.url).origin; } catch { return ''; } })(),
       domain: extractDomain(result.url),
       title: result.title || '',
       bannerFound: result.bannerFound || false,
@@ -233,8 +233,8 @@ async function saveToPopupHistory(result) {
 
     const { denyHistory: history = [] } = await chrome.storage.local.get('denyHistory');
 
-    const url = result.url || '';
-    const domain = extractDomain(url);
+    const url = (() => { try { return new URL(result.url).origin; } catch { return ''; } })();
+    const domain = extractDomain(result.url);
 
     // Deduplicate: skip if the same URL was saved by the popup within the last 5 seconds
     const recent = history[0];
@@ -262,8 +262,8 @@ async function saveToPopupHistory(result) {
 
     history.unshift(historyItem);
 
-    // Expire entries older than 30 days (matches popup HISTORY_EXPIRY_DAYS)
-    const expiryTime = Date.now() - (30 * 24 * 60 * 60 * 1000);
+    // Expire entries older than 90 days (matches popup HISTORY_EXPIRY_DAYS)
+    const expiryTime = Date.now() - (90 * 24 * 60 * 60 * 1000);
     const trimmed = history.filter(item => item.timestamp > expiryTime);
 
     await chrome.storage.local.set({ denyHistory: trimmed });
@@ -436,8 +436,8 @@ async function updateBadge(tabId, result) {
 // TELEMETRY (Optional, privacy-respecting)
 // =============================================================================
 
-const SUPABASE_URL = 'https://escavmkudfzqcypngohc.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_zzKwZzg9xEVXi_mxNWWZ5g_DPqkMZT4';
+const SUPABASE_URL = '';  // configure via supabase proxy
+const SUPABASE_ANON_KEY = '';  // removed — use server-side proxy
 
 let cachedSessionToken = null;
 function getSessionToken() {

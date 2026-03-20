@@ -7,7 +7,9 @@
   <style>
     :root {
       --bg: #0a0c0f; --surface: #111418; --border: #1e2530;
-      --accent: #ff3b5c; --text: #e8edf5; --dim: #8a95a8; --faint: #3d4655;
+      --accent: #9DC840; --accent-bg: #E2F5B0;
+      --accent-border: rgba(157,200,64,0.3); --accent-subtle: rgba(157,200,64,0.1);
+      --text: #e8edf5; --dim: #8a95a8; --faint: #3d4655;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -37,8 +39,8 @@
       border-radius: 4px; padding: 1px 6px; font-size: 0.88rem;
     }
     .badge {
-      display: inline-block; background: rgba(255,59,92,0.1);
-      color: var(--accent); border: 1px solid rgba(255,59,92,0.3);
+      display: inline-block; background: var(--accent-subtle);
+      color: var(--accent); border: 1px solid var(--accent-border);
       border-radius: 4px; padding: 2px 10px; font-size: 0.8rem;
       margin-left: 8px; vertical-align: middle;
     }
@@ -90,7 +92,7 @@
   </ul>
 
   <h2>5. Local Storage Only</h2>
-  <p>Your preferences (auto-deny on/off, telemetry opt-in, whether you dismissed the donation prompt) are stored using Chrome's <code>storage.local</code> API. This data lives only on your device and is never sent anywhere.</p>
+  <p>Your preferences (auto-deny on/off, telemetry opt-in, whether you dismissed the donation prompt) are stored using Chrome's <code>storage.local</code> API. This data lives only on your device and is never sent anywhere. The domain (e.g. https://cwjobs.co.uk, never the full page URL) of sites where banners are denied is stored locally for up to 90 days to power the history view, then automatically deleted.</p>
 
   <h2>6. Single Purpose Statement</h2>
   <p>Guardr has a single purpose: to deny all non-essential cookie consents on your behalf, keeping only cookies that are technically necessary for sites to function. All permissions requested exist solely to enable this function.</p>
@@ -108,7 +110,7 @@
   </p>
 
   <footer>
-    <p>Guardr v3.3.7 &nbsp;·&nbsp; Open source &nbsp;·&nbsp; Built for people, not platforms</p>
+    <p>Guardr v3.3.10 &nbsp;·&nbsp; Open source &nbsp;·&nbsp; Built for people, not platforms</p>
   </footer>
 
 </body>

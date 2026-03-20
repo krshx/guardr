@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Guardr - Cookie Consent Manager",
-  "version": "3.3.7",
+  "version": "3.3.10",
   "description": "Automatically denies optional cookies and protects your privacy. Event-driven, self-learning, universal detection.",
   "permissions": [
     "storage",
@@ -41,6 +41,9 @@
     "32": "icons/icon-32.png",
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
   },
   "web_accessible_resources": [
     {

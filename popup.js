@@ -33,7 +33,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const clearPatternsBtn = document.getElementById('clearPatternsBtn');
 
   // Constants
-  const HISTORY_EXPIRY_DAYS = 30;
+  const HISTORY_EXPIRY_DAYS = 90;
   const DONATION_SNOOZE_DAYS = 14;
   
   // Global filter state
@@ -504,8 +504,6 @@ document.addEventListener('DOMContentLoaded', async () => {
           });
         }
       });
-      maybeSendTelemetry(result);
-      
       // Save to history
       saveToHistory(result);
       
@@ -1202,7 +1200,7 @@ function createTimelineChart(history) {
   // Group by day
   const dayMap = {};
   const now = Date.now();
-  const thirtyDaysAgo = now - (30 * 24 * 60 * 60 * 1000);
+  const thirtyDaysAgo = now - (90 * 24 * 60 * 60 * 1000);
   
   history.forEach(item => {
     if (item.timestamp < thirtyDaysAgo) return;
@@ -1709,34 +1707,6 @@ async function incrementRunCount() {
   return newCount;
 }
 
-// Telemetry ping after successful clean
-async function maybeSendTelemetry(result) {
-  const data = await chrome.storage.local.get('telemetryOptIn');
-  if (!data.telemetryOptIn) return;
-
-  const cmpRaw = result.cmpDetected || 'unknown';
-  const known  = ['tcf','onetrust','cookiebot','trustarc','quantcast','didomi','usercentrics','axeptio'];
-  const cmp    = known.find(k => cmpRaw.toLowerCase().includes(k)) || 'other';
-
-  const payload = {
-    v:      '1.1.0',
-    s:      getAnonSession(),
-    cmp,
-    denied: Math.min(result.totalDenied ?? result.unchecked?.length ?? 0, 9999),
-    kept:   Math.min(result.mandatory?.length || 0, 100),
-    closed: result.bannerClosed ? 1 : 0,
-    ts:     Math.floor(Date.now() / 1000),
-  };
-
-  try {
-    await fetch('https://telemetry.guardr.io/ping', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-      keepalive: true,
-    });
-  } catch (_) { /* silent */ }
-}
 
 function getAnonSession() {
   // Use a per-install random ID stored locally (no personal data)
