@@ -436,8 +436,8 @@ async function updateBadge(tabId, result) {
 // TELEMETRY (Optional, privacy-respecting)
 // =============================================================================
 
-const SUPABASE_URL = '';  // configure via supabase proxy
-const SUPABASE_ANON_KEY = '';  // removed — use server-side proxy
+const SUPABASE_URL = 'https://escavmkudfzqcypngohc.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_zzKwZzg9xEVXi_mxNWWZ5g_DPqkMZT4';
 
 let cachedSessionToken = null;
 function getSessionToken() {

@@ -220,6 +220,7 @@ export class ResultBuilder {
       cmpDetected: null,
       cmpMethod: null,
       consentOrPay: false,
+      consentNotDenied: false,
       unchecked: [],
       mandatory: [],
       errors: [],
@@ -259,6 +260,15 @@ export class ResultBuilder {
    */
   setConsentOrPay() {
     this._data.consentOrPay = true;
+    return this;
+  }
+
+  /**
+   * Mark that the banner was hidden but consent was not denied via API/button
+   * (DOM force-hide path — banner gone but no preferences recorded)
+   */
+  setConsentNotDenied() {
+    this._data.consentNotDenied = true;
     return this;
   }
   

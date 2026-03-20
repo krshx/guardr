@@ -448,6 +448,9 @@ export class Analyzer {
     if (hasDeny) {
       const topDeny = byType[ButtonType.DENY][0];
       if (topDeny.score >= 8) {
+        // If a settings button also exists, prefer open-settings so the
+        // navigator can turn off vendor/LI toggles before the final deny.
+        if (hasSettings) return 'open-settings';
         return 'direct-deny';
       }
     }

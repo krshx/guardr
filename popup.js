@@ -445,6 +445,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     denyBtn.classList.remove('running');
     denyBtn.classList.add('done-state');
     denyBtn.disabled = true;
+
+    // DOM force-hide path: banner gone but consent preferences not recorded
+    if (result.consentNotDenied) {
+      btnText.textContent = 'Banner Hidden';
+      const method  = result.cmpMethod ? ` via ${result.cmpMethod}` : '';
+      const runtime = result.runtime ? ` (${(result.runtime/1000).toFixed(1)}s)` : '';
+      setStatus('done',
+        'Banner hidden — consent not denied',
+        ['CMP APIs unavailable — banner removed from DOM', method, runtime].filter(Boolean).join(' · ')
+      );
+      return;
+    }
+
     btnText.textContent = '✓ All Non-Essential Consents Denied';
 
     const removed = result.totalDenied

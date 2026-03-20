@@ -401,6 +401,23 @@ export function getInteractiveElements(container, options = {}) {
   const visible = Array.from(container.querySelectorAll(selectors.join(',')))
     .filter(el => isElementVisible(el) && !isPageNavLink(el));
 
+  // Fallback: divs/spans styled as buttons via class but not semantic elements
+  const clickableDivs = Array.from(container.querySelectorAll('div, span'))
+    .filter(el => {
+      if (!isElementVisible(el)) return false;
+      const cls = (el.className || '').toLowerCase();
+      return /\bbtn[\b_-]|\bbutton[\b_-]|\b(accept|reject|deny|confirm|save)\b/i.test(cls)
+        && el.querySelectorAll('button, a, input').length === 0;
+    });
+
+  const seenBase = new Set(visible);
+  for (const el of clickableDivs) {
+    if (!seenBase.has(el)) {
+      seenBase.add(el);
+      visible.push(el);
+    }
+  }
+
   if (!includeHidden) return visible;
 
   // Extra: section expanders that may be visually hidden but structurally functional.

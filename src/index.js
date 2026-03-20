@@ -358,6 +358,16 @@ class Orchestrator {
       return false;
     }
 
+    // Settings-first override: if the cached strategy is direct-deny but fresh analysis
+    // reveals a settings path, prefer open-settings so the navigator can turn off
+    // vendor/LI toggles before denial. Invalidate the stale pattern so it re-learns.
+    if (pattern.strategy === 'direct-deny' && plan.settingsButtons?.length > 0) {
+      log.info('Cached direct-deny overridden — settings path detected');
+      await this._learning.deletePattern(pattern.id);
+      plan.strategy = 'open-settings';
+      return (await this._actor.execute(plan, this._navVisited, false, this._result)).success;
+    }
+
     // Override strategy with cached one
     const originalStrategy = plan.strategy;
     plan.strategy = pattern.strategy;

@@ -312,6 +312,18 @@ export class Learning {
   }
   
   /**
+   * Delete a single pattern by id
+   * @param {string} id
+   */
+  async deletePattern(id) {
+    if (this._patterns.has(id)) {
+      this._patterns.delete(id);
+      await this._savePatterns();
+      log.info('Invalidated cached pattern:', id);
+    }
+  }
+
+  /**
    * Clear all learned patterns
    */
   async clearPatterns() {

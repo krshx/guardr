@@ -174,12 +174,19 @@ export class Actor {
     if (isSourcepoint) {
       log.info('Sourcepoint detected — comprehensive 5-path denial');
 
-      // PATH 1: window._sp_ or window.__cmp (FIXED: 8s timeout, was 3s)
-      const spReady = await this._waitForCondition(
-        () => !!(window._sp_ || window.__cmp), 
-        8000,  // CRITICAL FIX: increased from 3000
-        200
-      );
+      // PATH 1: window._sp_ or window.__cmp
+      // Pre-check: if no JS API indicators exist at all, skip the 8s wait
+      // (iframe-only Sourcepoint sites would always time out here)
+      let spReady = !!(window._sp_ || window.__cmp);
+      if (!spReady && !window._sp_queue) {
+        log.info('Sourcepoint: no JS API indicators — skipping API wait');
+      } else if (!spReady) {
+        spReady = await this._waitForCondition(
+          () => !!(window._sp_ || window.__cmp),
+          8000,
+          200
+        );
+      }
 
       if (spReady) {
         const sp = window._sp_ || window.__cmp; // FIXED: check both
@@ -298,8 +305,8 @@ export class Actor {
         
         log.info('✓ Sourcepoint DOM force');
         result.bannerFound('Sourcepoint');
-        result.bannerClosed('dom-force');
-        result.addDenied({ label: 'Banner hidden (APIs unavailable)', type: 'consent', category: 'dom' });
+        result.bannerClosed('dom-force-hide-only');
+        result.setConsentNotDenied();
         return true;
       } catch (e) {
         log.error('DOM force failed:', e.message);
