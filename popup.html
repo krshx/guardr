@@ -12,9 +12,9 @@
       --surface2: #181c22;
       --border: #1e2530;
       --border2: #252d3a;
-      --accent: #ff3b5c;
-      --accent-dim: rgba(255, 59, 92, 0.12);
-      --accent-glow: rgba(255, 59, 92, 0.25);
+      --accent: #9DC840;
+      --accent-dim: rgba(157, 200, 64, 0.12);
+      --accent-glow: rgba(157, 200, 64, 0.25);
       --success: #00e87a;
       --success-dim: rgba(0, 232, 122, 0.1);
       --warn: #ffb800;
@@ -71,7 +71,7 @@
     .logo-icon {
       width: 32px; height: 32px;
       background: var(--accent-dim);
-      border: 1px solid rgba(255, 59, 92, 0.3);
+      border: 1px solid rgba(157, 200, 64, 0.3);
       border-radius: 8px;
       display: flex; align-items: center; justify-content: center;
       font-size: 17px; flex-shrink: 0;
@@ -88,7 +88,7 @@
     .cmp-badge {
       display: inline-block; font-size: 9px; font-family: var(--mono);
       background: var(--accent-dim); color: var(--accent);
-      border: 1px solid rgba(255,59,92,0.2); border-radius: 3px;
+      border: 1px solid rgba(157,200,64,0.2); border-radius: 3px;
       padding: 1px 5px; margin-top: 3px; letter-spacing: 0.05em; text-transform: uppercase;
     }
     .auto-mode-badge {
@@ -140,7 +140,7 @@
     /* ── Deny Button ── */
     .deny-btn {
       width: 100%;
-      background: linear-gradient(135deg, #c0392b 0%, #ff3b5c 60%, #ff6b6b 100%);
+      background: linear-gradient(135deg, #6b8a2d 0%, #9DC840 60%, #b8e050 100%);
       color: #fff;
       border: none; border-radius: 10px;
       padding: 15px 20px;
@@ -155,7 +155,7 @@
       transform: translateX(-100%); transition: transform 0.4s;
     }
     .deny-btn:hover::before { transform: translateX(100%); }
-    .deny-btn:hover { box-shadow: 0 0 28px rgba(255,59,92,0.45); transform: translateY(-1px); }
+    .deny-btn:hover { box-shadow: 0 0 28px rgba(157,200,64,0.45); transform: translateY(-1px); }
     .deny-btn:active { transform: translateY(0); box-shadow: none; }
     .deny-btn:disabled {
       background: var(--surface2); color: var(--text-faint);
@@ -435,7 +435,7 @@
       border-radius: 3px; padding: 1px 5px; margin-top: 3px;
       text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-faint);
     }
-    .item-cat.consent     { color: var(--accent);  border-color: rgba(255,59,92,0.2);   background: var(--accent-dim); }
+    .item-cat.consent     { color: var(--accent);  border-color: rgba(157,200,64,0.2);   background: var(--accent-dim); }
     .item-cat.legitimate  { color: var(--warn);    border-color: rgba(255,184,0,0.2);   background: var(--warn-dim); }
     .item-cat.vendor      { color: #a78bfa;        border-color: rgba(167,139,250,0.2); background: rgba(167,139,250,0.08); }
     .item-cat.mandatory   { color: var(--warn);    border-color: rgba(255,184,0,0.2);   background: var(--warn-dim); }
@@ -471,10 +471,10 @@
     .settings-inner { padding: 12px; }
     
     /* Donation */
-    .donation-bar { background:linear-gradient(135deg,rgba(255,59,92,0.07),rgba(255,59,92,0.03));border-top:1px solid rgba(255,59,92,0.15);padding:8px 16px;display:flex;align-items:center;justify-content:space-between;gap:10px; }
+    .donation-bar { background:linear-gradient(135deg,rgba(157,200,64,0.07),rgba(157,200,64,0.03));border-top:1px solid rgba(157,200,64,0.15);padding:8px 16px;display:flex;align-items:center;justify-content:space-between;gap:10px; }
     .donation-text { font-size:11px;color:var(--text-dim);flex:1; }
-    .donation-btn { background:none;border:1px solid rgba(255,59,92,0.3);color:var(--accent);border-radius:5px;padding:4px 10px;font-size:10px;font-family:var(--mono);font-weight:700;cursor:pointer;letter-spacing:0.05em;white-space:nowrap;text-decoration:none;display:inline-block;transition:all 0.2s; }
-    .donation-btn:hover { background:rgba(255,59,92,0.1);border-color:var(--accent); }
+    .donation-btn { background:none;border:1px solid rgba(157,200,64,0.3);color:var(--accent);border-radius:5px;padding:4px 10px;font-size:10px;font-family:var(--mono);font-weight:700;cursor:pointer;letter-spacing:0.05em;white-space:nowrap;text-decoration:none;display:inline-block;transition:all 0.2s; }
+    .donation-btn:hover { background:rgba(157,200,64,0.1);border-color:var(--accent); }
 
     /* Contextual donation prompt */
     .donation-prompt { background:linear-gradient(135deg,rgba(255,184,0,0.08),rgba(255,184,0,0.03));border-top:1px solid rgba(255,184,0,0.2);padding:12px 16px;position:relative; }
@@ -496,7 +496,7 @@
     .clear-history-btn:hover { border-color:var(--accent);color:var(--accent); }
     .history-list { max-height:280px;overflow-y:auto; }
     .history-item { padding:10px 12px;border-bottom:1px solid var(--border);transition:background 0.2s; }
-    .history-item:hover { background:rgba(255,59,92,0.03); }
+    .history-item:hover { background:rgba(157,200,64,0.03); }
     .history-item-header { display:flex;justify-content:space-between;align-items:start;margin-bottom:4px; }
     .history-item-domain { font-size:11px;font-family:var(--mono);color:var(--text);font-weight:500;display:flex;align-items:center;gap:6px; }
     .history-item-date { font-size:9px;color:var(--text-faint);font-family:var(--mono); }
@@ -747,7 +747,7 @@
     <div class="footer-time" id="footerTime"></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <button class="settings-toggle" id="settingsToggle" title="Settings">&#9881;</button>
-      <div class="footer-note" id="versionStr">Guardr v3.3.10</div>
+      <div class="footer-note" id="versionStr">Guardr v3.3.11</div>
     </div>
   </div>
 

@@ -1,6 +1,6 @@
 # Guardr
 
-![version](https://img.shields.io/badge/version-3.3.10-blue)
+![version](https://img.shields.io/badge/version-3.3.11-blue)
 
 Guardr is a Chrome extension that automatically declines non-essential cookie consent on any website. It needs no site-specific rules — it analyses the page semantically, identifies the reject path, and takes it. Supports TCF 2.0, CCPA, OneTrust, Cookiebot, Didomi, Sourcepoint, and unrecognised CMPs via a goal-directed navigator.
 

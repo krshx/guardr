@@ -1066,13 +1066,13 @@ function createSuccessChart(stats) {
         backgroundColor: [
           'rgba(0, 232, 122, 0.8)',   // success green
           'rgba(255, 184, 0, 0.8)',   // warn yellow
-          'rgba(255, 59, 92, 0.8)',   // error red
+          'rgba(157, 200, 64, 0.8)',   // accent green
           'rgba(138, 149, 168, 0.5)'  // dim gray
         ],
         borderColor: [
           'rgba(0, 232, 122, 1)',
           'rgba(255, 184, 0, 1)',
-          'rgba(255, 59, 92, 1)',
+          'rgba(157, 200, 64, 1)',
           'rgba(138, 149, 168, 0.7)'
         ],
         borderWidth: 1
@@ -1094,7 +1094,7 @@ function createSuccessChart(stats) {
           position: 'bottom',
           labels: {
             color: '#e8edf5',
-            font: { size: 10, family: 'DM Sans' },
+            font: { size: 10, family: 'system-ui' },
             padding: 8
           }
         },
@@ -1128,12 +1128,12 @@ function createTypesChart(stats) {
         label: 'Count',
         data: [stats.consentDenials, stats.liDenials, stats.bannerClosures],
         backgroundColor: [
-          'rgba(255, 59, 92, 0.7)',
+          'rgba(157, 200, 64, 0.7)',
           'rgba(0, 200, 255, 0.7)',
           'rgba(0, 232, 122, 0.7)'
         ],
         borderColor: [
-          'rgba(255, 59, 92, 1)',
+          'rgba(157, 200, 64, 1)',
           'rgba(0, 200, 255, 1)',
           'rgba(0, 232, 122, 1)'
         ],
@@ -1231,8 +1231,8 @@ function createTimelineChart(history) {
       datasets: [{
         label: 'Denials',
         data: denialData,
-        borderColor: 'rgba(255, 59, 92, 1)',
-        backgroundColor: 'rgba(255, 59, 92, 0.1)',
+        borderColor: 'rgba(157, 200, 64, 1)',
+        backgroundColor: 'rgba(157, 200, 64, 0.1)',
         borderWidth: 2,
         fill: true,
         tension: 0.3
