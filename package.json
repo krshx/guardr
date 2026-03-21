@@ -13,6 +13,7 @@
     "install-deps": "npm install puppeteer --save-dev"
   },
   "devDependencies": {
+    "@napi-rs/canvas": "^0.1.97",
     "esbuild": "^0.25.12",
     "puppeteer": "^24.0.0",
     "sharp": "^0.34.5"
