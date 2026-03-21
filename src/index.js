@@ -9,7 +9,7 @@ import { getDetector } from './detector.js';
 import { getAnalyzer } from './analyzer.js';
 import { getActor } from './actor.js';
 import { getLearning } from './learning.js';
-import { isContextValid, safeSendMessage, log, initLogging, setDebugMode, getInteractiveElements } from './utils.js';
+import { isContextValid, safeSendMessage, log, initLogging, setDebugMode, getInteractiveElements, isElementVisible, clickElement } from './utils.js';
 
 /**
  * Main orchestrator - coordinates all modules
@@ -198,7 +198,7 @@ class Orchestrator {
         } else {
           // Pattern failed — reset state to allow fresh analysis.
           // State is currently ACTING; transition ACTING→ANALYZING is now valid.
-          log.warn('Cached pattern failed, analyzing fresh');
+          log.info('Cached pattern failed, analyzing fresh');
           await this._learning.recordFailure(context);
           // Reset: ACTING → FAILED → IDLE → DETECTED so _analyzeAndAct can run normally
           this._machine.transition(State.FAILED, { reason: 'pattern-retry' });
@@ -277,7 +277,7 @@ class Orchestrator {
     }
 
     if (plan.strategy === 'unknown') {
-      log.warn('No confident strategy found — trying fallbacks');
+      log.info('No confident strategy found — trying fallbacks');
       // Transition to ACTING (valid from ANALYZING)
       this._machine.transition(State.ACTING, { strategy: 'fallback', confidence: 0 });
       const fallbackSuccess = await this._tryFallbacks(plan);
@@ -354,7 +354,7 @@ class Orchestrator {
     // the caller falls through to a full fresh analysis instead of executing a strategy
     // that has nothing to click.
     if (pattern.strategy === 'direct-deny' && !(plan.denyButtons?.length > 0)) {
-      log.warn('Cached direct-deny pattern invalidated — no deny buttons found on fresh analysis');
+      log.info('Cached direct-deny pattern invalidated — no deny buttons found on fresh analysis');
       return false;
     }
 
@@ -404,9 +404,27 @@ class Orchestrator {
       }
     }
     
+    // Last resort — accept-only banner, no denial path available
+    const root = plan.banner || document.body;
+    const acceptOnlyRx = /^(ok|okay|got it|i understand)$/i;
+    const acceptBtn = Array.from(
+      root.querySelectorAll('button, [role="button"], div[class*="btn"], span[class*="btn"]')
+    ).find(el =>
+      acceptOnlyRx.test(el.innerText?.trim()) ||
+      acceptOnlyRx.test(el.textContent?.trim())
+    );
+
+    if (acceptBtn && isElementVisible(acceptBtn)) {
+      clickElement(acceptBtn);
+      this._result.bannerClosed('accept-only-no-denial-path');
+      this._result.addMandatory({ label: 'No denial option available', category: 'accept-only' });
+      log.info('No denial path — dismissed via accept-only button');
+      return true;
+    }
+
     return false;
   }
-  
+
   /**
    * Build context object for pattern matching
    * @private
@@ -702,8 +720,8 @@ if (typeof document !== 'undefined') {
     const orc = getOrchestrator();
     const actor = orc._actor;
     const banner = actor._findActiveBanner();
-    if (!banner) { console.warn('[Guardr] No active banner found'); return; }
-    console.log('[Guardr] Scoping to:', banner.tagName, banner.id || banner.className.slice(0, 60));
+    if (!banner) { log.warn('No active banner found'); return; }
+    log.debug('Scoping to:', banner.tagName, banner.id || banner.className.slice(0, 60));
     const els = getInteractiveElements(banner, { includeHidden: true });
     const rows = els.map(el => ({
       tag:  el.tagName?.toLowerCase(),

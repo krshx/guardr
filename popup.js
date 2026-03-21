@@ -458,6 +458,20 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
 
+    // Accept-only banner: no denial path existed — banner dismissed via accept
+    if (result.cmpMethod === 'accept-only-no-denial-path') {
+      btnText.textContent = 'Banner Dismissed';
+      const runtime = result.runtime ? ` (${(result.runtime/1000).toFixed(1)}s)` : '';
+      denyBtn.style.setProperty('--btn-done-color', '#b8860b');
+      setStatus('warning',
+        'No denial option — banner dismissed',
+        ['No reject/deny button found', runtime].filter(Boolean).join(' · ')
+      );
+      bannerStatus.className = 'banner-status not-closed';
+      bannerStatus.textContent = '⚠ No denial option available on this site';
+      return;
+    }
+
     btnText.textContent = '✓ All Non-Essential Consents Denied';
 
     const removed = result.totalDenied

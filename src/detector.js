@@ -3,7 +3,7 @@
  * Event-driven banner detection using MutationObserver
  */
 
-import { BannerSelectors, CMPSignatures, CMPContainerPatterns, PaywallSignals, Events, Timing, State } from './constants.js';
+import { BannerSelectors, CMPSignatures, CMPContainerPatterns, PaywallSignals, Signals, Events, Timing, State } from './constants.js';
 import { isElementVisible, debounce, getElementText, log } from './utils.js';
 import { getStateMachine } from './state-machine.js';
 
@@ -218,27 +218,7 @@ export class Detector extends EventTarget {
    * @private
    */
   _hasSufficientConsentContent(el) {
-    // Extract text only from direct text nodes of semantic block elements
-    // and one level of immediate children. Using el.textContent traverses the
-    // full subtree and would match 'cookie' from image captions, search result
-    // titles, or other non-consent content nested deep in the element.
-    const textParts = [];
-    el.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, label, legend, [role="heading"]').forEach(node => {
-      for (const child of node.childNodes) {
-        if (child.nodeType === Node.TEXT_NODE) textParts.push(child.textContent);
-      }
-    });
-    // Also capture direct text nodes of the element and its immediate children
-    // so simple banners (e.g. <div><span>We use cookies</span><button>…</button></div>)
-    // are still detected even without block-level markup.
-    for (const node of [el, ...el.children]) {
-      for (const child of node.childNodes) {
-        if (child.nodeType === Node.TEXT_NODE && child.textContent.trim()) {
-          textParts.push(child.textContent);
-        }
-      }
-    }
-    const text = (textParts.length > 0 ? textParts.join(' ') : el.textContent || '').toLowerCase();
+    const text = (el.innerText || el.textContent || '').toLowerCase();
 
     const primarySignals = [
       'cookie', 'consent', 'gdpr', 'personal data', 'your data',
@@ -248,9 +228,8 @@ export class Detector extends EventTarget {
     const matchedPrimary = primarySignals.filter(s => text.includes(s));
     const hits = matchedPrimary.length;
     // Also require a deny/reject-flavoured word to confirm it's an actionable banner.
-    // Includes "just necessary/essential" — CWJobs uses "Just Necessary" as the reject label.
-    const denyPattern = /(reject|deny|decline|refuse|necessary only|essential only|essential cookies only|just\s+(necessary|essential|required)|opt.?out|ablehnen|refuser|rechazar)/i;
-    const hasDenySignal = denyPattern.test(text);
+    // Uses the canonical Signals.DENY list from constants.js — single source of truth.
+    const hasDenySignal = Signals.DENY.some(signal => text.includes(signal));
     // Option C: banner contains a manage/preference/settings entry point
     const managePattern = /manage|preference|setting|customis|option/i;
     const hasManageSignal = !![...el.querySelectorAll('button,a,[role="button"]')].some(btn => managePattern.test(btn.textContent));
@@ -264,12 +243,25 @@ export class Detector extends EventTarget {
       return false;
     }
 
-    // Pass if any one of A/B/C holds:
+    // Pass if any one of A/B/C/D holds:
     //   A — strong: consent keyword + deny/reject text
     //   B — dense:  two or more consent keywords
     //   C — manage: consent keyword + manage/settings button
-    const passes = (hits >= 1 && hasDenySignal) || hits >= 2 || (hits >= 1 && hasManageSignal);
+    //   D — accept-only: consent keyword + ≤2 buttons + ok/got-it style label
+    //       (allows Guardr to attempt all denial strategies before accepting)
+    const hasSingleAction = el.querySelectorAll('button, [role="button"], a').length <= 2;
+    const acceptOnlySignal = /\b(ok|okay|got it|i understand)\b/i;
+    const passes = (hits >= 1 && hasDenySignal) || hits >= 2 || (hits >= 1 && hasManageSignal) ||
+                   (hits >= 1 && hasSingleAction && acceptOnlySignal.test(el.innerText));
     log.debug(`  [consent-check] <${el.tagName.toLowerCase()} id="${el.id}"> hits=${hits} [${matchedPrimary.join(',')}] deny=${hasDenySignal} manage=${hasManageSignal} childCount=${childCount} passes=${passes}`);
+    log.debug('[consent-check-detail]',
+      el.tagName, el.id,
+      'hits:', hits,
+      'deny:', hasDenySignal,
+      'manage:', hasManageSignal,
+      'children:', childCount,
+      'passes:', passes
+    );
     return passes;
   }
   

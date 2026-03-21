@@ -525,7 +525,7 @@ export class Analyzer {
   _classifyNavRole(element) {
     const role = this._classifyNavRoleInner(element);
     const text = (element.textContent?.trim() || element.getAttribute('aria-label') || '').slice(0, 60);
-    console.log(`[Guardr][NavRole] <${element.tagName?.toLowerCase()}> "${text}" → ${role ?? 'null'}`);
+    log.debug(`[NavRole] <${element.tagName?.toLowerCase()}> "${text}" → ${role ?? 'null'}`);
     return role;
   }
 
@@ -631,7 +631,7 @@ export class Analyzer {
       if (!el) break;
       const checkboxes = Array.from(el.querySelectorAll('input[type="checkbox"]'));
       const uncheckedSiblings = checkboxes.filter(cb => cb !== element && !cb.checked);
-      console.log('[Guardr][Navigator] pair check:', element.id,
+      log.debug('[Navigator] pair check:', element.id,
         'checked:', element.checked,
         'level:', i + 1, '(' + (el.tagName || '?') + '#' + (el.id || '') + ')',
         'siblings:', checkboxes.length,

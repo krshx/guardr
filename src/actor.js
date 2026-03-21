@@ -119,7 +119,7 @@ export class Actor {
 
       // Verify banner is closed after strategy
       if (success && !await this._verifyBannerClosed(plan.banner)) {
-        log.warn('Banner still visible after actions');
+        log.info('Banner still visible after actions');
         success = false;
       }
 
@@ -1130,7 +1130,7 @@ export class Actor {
    */
   async _expandAndSweep(container, result, depth = 0) {
     if (depth >= 4) {
-      log.warn(`[Guardr] _expandAndSweep: depth limit reached (${depth}), stopping`);
+      log.debug('_expandAndSweep: depth limit reached, stopping');
       return 0;
     }
 
@@ -1270,7 +1270,31 @@ export class Actor {
     }
 
     // Last resort: generic text scan
-    return this._executeGenericDenySearch(plan, result);
+    const genericSuccess = await this._executeGenericDenySearch(plan, result);
+    if (genericSuccess) return true;
+
+    // Absolute last resort — accept-only banner, no denial path available
+    log.debug('[accept-only] check — banner:',
+      !!plan.banner, 'buttons found:',
+      plan.banner?.querySelectorAll('button,[role="button"]').length
+    );
+    const root = plan.banner || document.body;
+    Array.from(root.querySelectorAll('button,[role="button"]'))
+      .forEach(b => log.debug('[accept-only] candidate:', b.tagName, JSON.stringify(b.innerText?.trim())));
+    const acceptOnlyRx = /^(ok|okay|got it|i understand)$/i;
+    const acceptBtn = Array.from(
+      root.querySelectorAll('button, [role="button"], div.btn, span.btn, div[class*="btn"], div[class*="button"]')
+    ).find(el => acceptOnlyRx.test(el.innerText?.trim()) || acceptOnlyRx.test(el.textContent?.trim()));
+
+    if (acceptBtn && isElementVisible(acceptBtn)) {
+      clickElement(acceptBtn);
+      result.bannerClosed('accept-only-no-denial-path');
+      result.addMandatory({ label: 'No denial option available', category: 'accept-only' });
+      log.info('No denial path found — dismissed via accept-only button');
+      return true;
+    }
+
+    return false;
   }
 
   /**
@@ -1460,7 +1484,7 @@ export class Actor {
       // Phase is checked at the TOP of every iteration — before any element collection.
       // Auto-advance uses `continue` so the new phase is active from the start of the
       // next iteration (sibling scan, element collection, etc. all run with correct phase).
-      console.log('[Guardr][Navigator] loop start depth=', depth, 'phase=', phase);
+      log.debug('[Navigator] loop start depth=', depth, 'phase=', phase);
 
       if (!activeBanner) break;
 
@@ -1477,12 +1501,12 @@ export class Actor {
         // so all consent/LI checkboxes across parallel DOM sections are in the pool.
         const allInputs = [];
         allConsentContainers.forEach(c => {
-          console.log('[Guardr][Navigator] container:', c.tagName, c.id, (c.className || '').slice(0, 30));
+          log.debug('[Navigator] container:', c.tagName, c.id, (c.className || '').slice(0, 30));
           allInputs.push(...Array.from(c.querySelectorAll('input[type="checkbox"]')));
         });
 
         const liCandidates = allInputs.filter(el => el.checked);
-        console.log('[Guardr][Navigator] sibling scan — containers found:',
+        log.debug('[Navigator] sibling scan — containers found:',
           allConsentContainers.length,
           'checked inputs:', allInputs.length,
           'LI candidates:', liCandidates.length
@@ -1509,7 +1533,7 @@ export class Actor {
           }
           const siblings = pairParent ? Array.from(pairParent.querySelectorAll('input[type="checkbox"]')) : [];
           const uncheckedSiblings = siblings.filter(s => s !== el && !s.checked);
-          console.log('[Guardr][PairDebug]', el.id,
+          log.debug('[PairDebug]', el.id,
             'checked:', el.checked,
             'parent tag/id:', pairParent?.tagName, pairParent?.id,
             'total siblings:', siblings.length,
@@ -1670,7 +1694,7 @@ export class Actor {
       result.bannerClosed('navigator');
       log.info('[Guardr][Navigator] ✓ Banner closed');
     } else {
-      log.warn('[Guardr][Navigator] ✗ Banner still visible after SAVE_CONFIRM');
+      log.debug('[Navigator] ✗ Banner still visible after SAVE_CONFIRM');
     }
     return bannerGone;
   }
